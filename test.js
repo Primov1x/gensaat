@@ -1,0 +1,1723 @@
+// node test.js        Prüfungen der Spiellogik
+// node test.js tempo  Tempo-Bot: wann fallen die Meilensteine?
+const assert = require('assert');
+const D = require('./js/data.js');
+const E = require('./js/engine.js');
+
+const tests = [];
+const test = (name, fn) => tests.push([name, fn]);
+const near = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-6, `${what}: ${a} statt ${b}`);
+const byId = (list, id) => list.find(x => x.id === id);
+// Dark Angels haben in Etappe 1 keine wirksamen Ordenswerte: neutraler Stand für die meisten Tests.
+const fresh = (ch = 'da') => E.create(ch);
+
+test('Daten: jede verwiesene Id existiert', () => {
+  const ids = list => {
+    const set = new Set(list.map(x => x.id));
+    assert.strictEqual(set.size, list.length, 'doppelte Id');
+    return set;
+  };
+  const res = ids(D.resources), bld = ids(D.buildings), jobs = ids(D.jobs), tech = ids(D.techs), places = ids(D.places);
+  ids(D.chapters);
+  ids(D.clicks);
+  ids(D.offices);
+  const FREE = new Set(['serfs.cap', 'cap.bonus', 'arrival.bonus', 'moral.bonus', 'flee.slow', 'price.building',
+    'implant.slots', 'marines.cap', 'training.speed', 'power.bonus', 'implant.bonus', 'implant.wulfen', 'mission.speed',
+    'defense.flat', 'loot.bonus', 'loot.archeotech', 'mission.repeat', 'craft.bonus', 'loss.reduce', 'recover.bonus',
+    'scout.speed', 'production.bonus', 'jobs.bonus', 'defense.bonus', 'litany.bonus', 'company.bonus', 'thirst',
+    'vision.auto', 'trade.bonus', 'servitor.bonus', 'standing.bonus', 'threat.slow',
+    'fleet.power', 'hangar.hawk', 'hangar.cruiser', 'campaign.speed', 'vision.bonus', 'serfs.capPct',
+    'offline.days', 'vision.rate']);
+  const checkEffects = (fx, where) => {
+    for (const k in fx) {
+      const [a, b] = k.split('.');
+      const known = FREE.has(k) || (a === 'job' && jobs.has(b)) || (res.has(a) && ['rate', 'cap', 'capPct', 'bonus'].includes(b));
+      assert.ok(known, `${where}: unbekannter Effekt ${k}`);
+    }
+  };
+  for (const x of [...D.buildings, ...D.techs]) for (const r in x.cost) assert.ok(res.has(r), `${x.id}: Kosten ${r}`);
+  for (const x of [...D.buildings, ...D.jobs, ...D.techs, ...D.chapters, ...D.offices, ...D.places]) {
+    checkEffects(x.effects || {}, x.id);
+  }
+  for (const p of D.places) for (const r in p.reward || {}) assert.ok(res.has(r), `${p.id}: Beute ${r}`);
+  ids(D.recipes);
+  ids(D.upgrades);
+  for (const r of D.recipes) {
+    assert.ok(res.has(r.id) && byId(D.resources, r.id).crafted, `Rezept ${r.id}: keine hergestellte Ressource`);
+    for (const c in r.cost) assert.ok(res.has(c), `Rezept ${r.id}: Kosten ${c}`);
+  }
+  for (const u of D.upgrades) {
+    for (const c in u.cost) assert.ok(res.has(c), `${u.id}: Kosten ${c}`);
+    checkEffects(u.effects, u.id);
+    assert.ok(u.desc.length < 90, `${u.id}: Beschreibung zu lang`);
+  }
+  for (const r of D.resources) checkEffects({ ...r.perUnit, ...r.perUnitMax }, r.id);
+  const rites = ids(D.rites);
+  ids(D.litanies);
+  for (const x of [...D.rites, ...D.litanies]) checkEffects(x.effects, x.id);
+  for (const l of D.litanies) if (l.requires) assert.ok(rites.has(l.requires.rite), `${l.id}: Ritus`);
+  for (const ch of D.chapters) {
+    const events = D.chapterEvents[ch.id];
+    assert.strictEqual(events?.length, 6, `${ch.id}: 6 Ordens-Ereignisse`);
+    for (const ev of events) {
+      assert.ok(ev.text.length <= 100, `${ch.id}: Ereignis zu lang: ${ev.text}`);
+      assert.strictEqual(['gift', 'boon', 'thirst', 'sign', 'calm'].filter(k => k in ev).length, 1, `${ch.id}: genau eine Wirkung`);
+      for (const r in ev.gift || {}) assert.ok(res.has(r), `${ch.id}: Geschenk ${r}`);
+      checkEffects(ev.boon || {}, ch.id);
+    }
+  }
+  ids(D.missions);
+  for (const m of D.missions) {
+    for (const r in { ...m.loot, ...m.lucky }) assert.ok(res.has(r), `${m.id}: Beute ${r}`);
+    assert.ok(m.squad[0] >= 1 && m.squad[0] <= m.squad[1] && m.threat > 0 && m.time > 0, `${m.id}: Zahlen`);
+  }
+  const partners = ids(D.partners);
+  for (const p of D.partners) {
+    for (const r in p.give) assert.ok(res.has(r), `${p.id}: will ${r}`);
+    for (const r in p.get) assert.ok(res.has(r) || r === 'serfs', `${p.id}: gibt ${r}`);
+    checkEffects(p.help, p.id);
+    assert.ok(p.desc.length < 90, `${p.id}: Beschreibung zu lang`);
+  }
+  ids(D.worldEvents);
+  for (const w of D.worldEvents) checkEffects(w.effects || {}, w.id);
+  ids(D.relics);
+  for (const r of D.relics) {
+    assert.ok(r.cost > 0 && r.desc.length < 90, `${r.id}: Kosten, Beschreibung`);
+    checkEffects(r.effects || {}, r.id);
+    const st = r.start || {};
+    for (const k in st.res || {}) assert.ok(res.has(k), `${r.id}: Start ${k}`);
+    for (const k in st.bld || {}) assert.ok(bld.has(k), `${r.id}: Start ${k}`);
+    for (const k of st.tech || []) assert.ok(tech.has(k), `${r.id}: Start ${k}`);
+    for (const k of st.places || []) assert.ok(places.has(k), `${r.id}: Start ${k}`);
+  }
+  ids(D.palettes);
+  for (const p of D.palettes) assert.ok(['c1', 'c2', 'on', 'glow'].every(k => /^#[0-9a-f]{6}$/.test(p[k])), `${p.id}: Farben`);
+  for (const ch of D.chapters) {
+    assert.ok(ch.boost.length && ch.boost.every(k => k in ch.effects), `${ch.id}: boost`);
+    assert.ok(ch.successors.length >= 3 && ch.successors.every(n => n.length <= D.rules.nameMax), `${ch.id}: Nachfolger`);
+  }
+  assert.ok(D.flair.length >= 10 && D.flair.every(t => t.length <= 100), 'Flair-Zeilen');
+  ids(D.ships);
+  for (const sh of D.ships) {
+    for (const r in sh.cost) assert.ok(res.has(r), `${sh.id}: Kosten ${r}`);
+    checkEffects(sh.effects, sh.id);
+  }
+  const systems = ids(D.systems);
+  for (const sy of D.systems) {
+    for (const n of sy.next) {
+      assert.ok(systems.has(n), `${sy.id}: Nachbar ${n}`);
+      assert.ok(D.systems.find(x => x.id === n).next.includes(sy.id), `${sy.id} ↔ ${n}`);
+    }
+    checkEffects(sy.effects || {}, sy.id);
+    for (const r in sy.reward || {}) assert.ok(res.has(r), `${sy.id}: Beute ${r}`);
+    assert.ok(sy.home || (sy.threat > 0 && sy.nav > 0 && sy.time > 0), `${sy.id}: Zahlen`);
+  }
+  for (const x of [...D.resources, ...D.buildings, ...D.jobs, ...D.techs, ...D.offices, ...D.places, ...D.missions,
+    ...D.partners, ...D.worldEvents, ...D.ships, ...D.upgrades]) {
+    for (const t of [].concat(x.requires?.tech || [])) assert.ok(tech.has(t), `${x.id}: Lehre ${t}`);
+    for (const b of [].concat(x.requires?.building || [])) assert.ok(bld.has(b), `${x.id}: Gebäude ${b}`);
+    for (const p of [].concat(x.requires?.place || [])) assert.ok(places.has(p), `${x.id}: Ort ${p}`);
+    for (const p in x.requires?.standing || {}) assert.ok(partners.has(p), `${x.id}: Partner ${p}`);
+  }
+  for (const c of D.clicks) assert.ok(res.has(c.id), `Klick ${c.id}`);
+  for (const season of D.rules.seasons) for (const r in season.mult) assert.ok(res.has(r), `${season.name}: ${r}`);
+  for (const ch of D.chapters) {
+    assert.ok(Object.values(ch.colors).every(c => /^#[0-9a-f]{6}$/.test(c)), `${ch.id}: Farben`);
+    assert.ok(ch.names.length >= 6, `${ch.id}: Namen`);
+  }
+  for (const x of [...D.buildings, ...D.techs, ...D.places]) assert.ok(x.desc.length < 90, `${x.id}: Beschreibung zu lang`);
+});
+
+test('Neuer Stand: Orden, Start-Log, unbekannter Orden', () => {
+  const s = fresh('um');
+  assert.deepStrictEqual([s.chapter, s.serfs, s.res.scrap, s.bld.quarters], ['um', 0, 0, 0]);
+  assert.match(s.log[0].text, /„Ehre von Macragge“ ist über Kharos Tertius zerschellt/);
+  assert.match(s.log[1].text, /Sus-an-Koma/);
+  assert.strictEqual(s.log[0].date, '0.000.012.M42');
+  assert.throws(() => E.create('orks'));
+  assert.throws(() => E.create('constructor'));
+  const kept = E.create('ba', { honors: [{ date: 'd', chapter: 'c', text: 't' }] });
+  assert.strictEqual(kept.meta.honors.length, 1);
+});
+
+test('Datum und Planetenzeit aus der Spielzeit', () => {
+  const s = fresh();
+  let c = E.calendar(s);
+  assert.deepStrictEqual([c.date, c.seasonName, c.seasonLeft], ['0.000.012.M42', 'Sonnenzeit', 250]);
+  s.time = 118.7;
+  assert.strictEqual(E.calendar(s).date, '0.118.012.M42');
+  s.time = 250;
+  assert.strictEqual(E.calendar(s).seasonName, 'Sturmzeit');
+  s.time = 999.5;
+  c = E.calendar(s);
+  assert.deepStrictEqual([c.date, c.seasonName], ['0.999.012.M42', 'Frostzeit']);
+  s.time = 988 * 1000 + 5;
+  assert.strictEqual(E.calendar(s).date, '0.005.000.M43');   // nach 999.M42 kommt 000.M43
+  s.time = 1000;
+  c = E.calendar(s);
+  assert.deepStrictEqual([c.date, c.seasonName, c.year], ['0.000.013.M42', 'Sonnenzeit', 13]);
+});
+
+test('Preise steigen mit dem Faktor, White Scars zahlen 15 % mehr', () => {
+  const s = fresh();
+  s.res.scrap = 60;
+  assert.ok(E.build(s, 'quarters'));
+  assert.ok(E.build(s, 'quarters'));
+  near(s.res.scrap, 60 - 12 - 19.2, 'bezahlt (12 + 19,2)');
+  near(E.price(s, 'building', 'quarters').scrap, 30.72, 'drittes Quartier');
+  assert.strictEqual(E.serfCap(s), 4);
+  s.res.scrap = 60;
+  assert.strictEqual(E.build(s, 'storehouse'), false);   // bezahlbar, aber noch nicht erforscht
+  const ws = fresh('ws');
+  near(E.price(ws, 'building', 'hydroFarm').supplies, 11.5, 'White Scars: 10 × 1,15');
+  near(E.price(ws, 'tech', 'calendar').knowledge, 15, 'Lehren kosten gleich');
+});
+
+test('Ultramarines: Lager +20 %', () => {
+  near(E.cap(fresh('um'), 'scrap'), 180, 'Schrott-Lager 150 × 1,2');
+  near(E.cap(fresh(), 'scrap'), 150, 'ohne Bonus');
+});
+
+test('Klicks: +1, nicht über das Lager, nur Klick-Rohstoffe', () => {
+  const s = fresh();
+  assert.ok(E.click(s, 'scrap'));
+  assert.strictEqual(s.res.scrap, 1);
+  s.res.supplies = 200;
+  assert.strictEqual(E.click(s, 'supplies'), false);
+  assert.strictEqual(E.click(s, 'knowledge'), false);
+});
+
+test('Lehren kosten Wissen und schalten frei; die erste kommt in den Liber Honoris', () => {
+  const s = fresh();
+  assert.strictEqual(E.isUnlocked(s, byId(D.techs, 'storage')), false);
+  s.res.knowledge = 10;
+  assert.strictEqual(E.research(s, 'calendar'), false);   // zu wenig Wissen
+  s.res.knowledge = 100;
+  assert.strictEqual(E.research(s, 'storage'), false);    // Kalender fehlt
+  assert.ok(E.research(s, 'calendar'));
+  near(s.res.knowledge, 85, 'Wissen nach Kalender');
+  assert.ok(E.research(s, 'storage'));
+  assert.strictEqual(E.research(s, 'storage'), false);    // schon erforscht
+  assert.ok(E.isUnlocked(s, byId(D.buildings, 'storehouse')));
+  assert.strictEqual(E.isUnlocked(s, byId(D.jobs, 'farmer')), false);
+  assert.match(s.log.at(-1).text, /Erforscht: Lagerhaltung/);
+  assert.deepStrictEqual(s.meta.honors.map(h => h.text), ['Erste Lehre im Librarium: Imperialer Kalender.']);
+  assert.strictEqual(s.meta.honors[0].chapter, 'Dark Angels');
+});
+
+test('Freischaltung über Merker und Gebäude', () => {
+  const s = fresh();
+  const scr = byId(D.buildings, 'scriptorium');
+  assert.strictEqual(E.isUnlocked(s, scr), false);
+  s.seen.serfs = true;
+  assert.ok(E.isUnlocked(s, scr));
+  assert.strictEqual(E.isUnlocked(s, byId(D.jobs, 'scribe')), false);
+  assert.strictEqual(E.isUnlocked(s, byId(D.resources, 'knowledge')), false);
+  s.res.scrap = 25; s.res.supplies = 10;
+  assert.ok(E.build(s, 'scriptorium'));
+  assert.ok(E.isUnlocked(s, byId(D.jobs, 'scribe')));
+  assert.ok(E.isUnlocked(s, byId(D.resources, 'knowledge')));
+  near(E.cap(s, 'knowledge'), 200, 'Wissen-Lager 100 + 100');
+});
+
+test('Jobs verteilen', () => {
+  const s = fresh();
+  s.serfs = 2;
+  assert.strictEqual(E.assign(s, 'farmer', 1), false);        // frei, aber noch nicht erforscht
+  assert.ok(E.assign(s, 'scrapper', 1));
+  assert.ok(E.assign(s, 'scrapper', 1));
+  assert.strictEqual(E.assign(s, 'scrapper', 1), false);      // keine frei
+  assert.ok(E.assign(s, 'scrapper', -1));
+  assert.strictEqual(E.free(s), 1);
+  assert.strictEqual(E.assign(s, 'scrapper', 0), false);      // nur +1 oder -1
+  s.tech.hydroponics = true;
+  assert.strictEqual(E.assign(s, 'farmer', -1), false);       // niemand zum Abziehen
+  assert.ok(E.assign(s, 'farmer', 1));
+  assert.strictEqual(E.free(s), 0);
+});
+
+test('Produktion: Gebäude, Jobs, Essen, Planetenzeiten', () => {
+  const s = fresh();
+  s.bld.hydroFarm = 2; s.serfs = 2; s.jobs.scrapper = 1; s.res.supplies = 50;
+  near(E.rates(s).supplies, 0.65, 'Sonnenzeit: 2 × 0,5 × 1,25 − 2 × 0,3');
+  near(E.rates(s).scrap, 0.3, 'Schrott');
+  E.step(s, 10);
+  near(s.res.supplies, 56.5, 'Vorräte nach 10 s');
+  near(s.res.scrap, 3, 'Schrott nach 10 s');
+  s.time = 250;
+  near(E.rates(s).scrap, 0.375, 'Sturmzeit: Schrott × 1,25');
+  near(E.rates(s).supplies, 0.4, 'Sturmzeit: Vorräte × 1');
+  s.time = 750;
+  near(E.rates(s).supplies, 2 * 0.5 * 0.5 - 0.6, 'Frostzeit: Vorräte × 0,5');
+});
+
+test('Lager deckelt, Klick am Limit geht nicht', () => {
+  const s = fresh();
+  s.res.scrap = 149.5; s.res.supplies = 100; s.serfs = 1; s.jobs.scrapper = 1;
+  E.step(s, 10);
+  near(s.res.scrap, 150, 'Schrott am Limit');
+  near(s.res.supplies, 97, 'ein Knecht isst 0,3/s');
+  assert.strictEqual(E.click(s, 'scrap'), false);
+  assert.ok(E.click(s, 'supplies'));
+  near(s.res.supplies, 98, 'Vorrat geborgen');
+});
+
+test('Schreiber mit Skriptorium, Bauer in der Sonnenzeit', () => {
+  const s = fresh();
+  s.seen.serfs = true; s.tech.hydroponics = true; s.serfs = 2; s.res.scrap = 25; s.res.supplies = 50;
+  assert.ok(E.build(s, 'scriptorium'));
+  assert.ok(E.assign(s, 'scribe', 1));
+  near(E.rates(s).knowledge, 0.15 * 1.05, 'Schreiber +5 % durch das Skriptorium');
+  const before = E.rates(s).supplies;
+  assert.ok(E.assign(s, 'farmer', 1));
+  near(E.rates(s).supplies - before, 1.25, 'Bauer wirkt sofort (× 1,25)');
+});
+
+test('Zuzug: der erste kommt immer, weitere nur mit genug Vorräten', () => {
+  const s = fresh();
+  s.bld.quarters = 2; s.res.supplies = 100;
+  E.step(s, 20);
+  assert.strictEqual(s.serfs, 1);                            // der erste auch ohne Farm
+  assert.match(s.log.at(-1).text, /Überlebender/);
+  assert.strictEqual(s.meta.honors.at(-1).text, 'Der erste Knecht schließt sich dem Orden an.');
+  E.step(s, 40);
+  assert.strictEqual(s.serfs, 1);                            // ohne Überschuss kein zweiter
+  assert.strictEqual(E.arrivalBlock(s), 'food');
+  s.res.scrap = 30;
+  assert.ok(E.build(s, 'hydroFarm'));                        // 0,75/s, einer isst 0,3
+  assert.strictEqual(E.arrivalBlock(s), null);
+  E.step(s, 20);
+  assert.strictEqual(s.serfs, 2);
+  assert.match(s.log.at(-1).text, /schließt sich dem Orden an/);
+  E.step(s, 60);
+  assert.strictEqual(s.serfs, 2);                            // 0,75 − 0,6 reicht nicht für einen dritten
+});
+
+test('Zuzug: in der Frostzeit kommt niemand', () => {
+  const s = fresh();
+  s.bld.quarters = 2; s.bld.hydroFarm = 10; s.res.supplies = 100;
+  s.time = 750;
+  assert.strictEqual(E.arrivalBlock(s), 'frost');
+  E.step(s, 240);
+  assert.strictEqual(s.serfs, 0);
+  E.step(s, 30);                                             // ab 1.000 wieder Sonnenzeit
+  assert.strictEqual(s.serfs, 1);
+});
+
+test('Ultramarines: Knechte kommen 10 % schneller', () => {
+  const um = fresh('um');
+  um.bld.quarters = 2; um.res.supplies = 100;
+  E.step(um, 18.2);
+  assert.strictEqual(um.serfs, 1);                           // 20 s ÷ 1,1 ≈ 18,18 s
+  const da = fresh();
+  da.bld.quarters = 2; da.res.supplies = 100;
+  E.step(da, 18.2);
+  assert.strictEqual(da.serfs, 0);
+});
+
+test('Hunger: Moral −30 % (nicht für Bauern), nach 30 s flieht einer', () => {
+  const s = fresh();
+  s.tech.hydroponics = true; s.bld.quarters = 1; s.serfs = 2; s.jobs.scrapper = 1; s.jobs.farmer = 1;
+  s.time = 750;                                              // Frostzeit: Bauer 0,5/s, zwei essen 0,6
+  E.step(s, 1);
+  assert.strictEqual(s.isHungry, true);
+  near(E.moral(s), 0.7, 'Moral hungrig');
+  near(E.rates(s).scrap, 0.3 * 0.7, 'Schrottsammler gebremst');
+  near(E.rates(s).supplies, 0.5 - 0.6, 'Bauer ungebremst');
+  E.step(s, 29);
+  assert.strictEqual(s.serfs, 1);
+  assert.deepStrictEqual([s.jobs.scrapper, s.jobs.farmer], [0, 1]);   // Bauern zuletzt
+  assert.match(s.log.at(-1).text, /flieht/);
+});
+
+test('Hunger: eine satte Pause setzt die Frist zurück', () => {
+  const s = fresh();
+  s.serfs = 2;
+  E.step(s, 20);
+  s.res.supplies = 20; E.step(s, 10);
+  s.res.supplies = 0; E.step(s, 20);
+  assert.strictEqual(s.serfs, 2);                            // nie 30 s am Stück hungrig
+});
+
+test('Salamanders: Moral +15 %, Knechte fliehen erst nach 60 s', () => {
+  const s = fresh('sal');
+  s.serfs = 2; s.jobs.scrapper = 2;
+  near(E.moral(s), 1.15, 'Beschützer');
+  E.step(s, 59);
+  assert.strictEqual(s.serfs, 2);
+  E.step(s, 1);
+  assert.strictEqual(s.serfs, 1);
+});
+
+test('Moral: Gedränge über 20 Knechte bremst die Jobs', () => {
+  const s = fresh();
+  s.serfs = 30; s.jobs.scrapper = 1;
+  near(E.moral(s), 0.95, 'Gedränge (30 Knechte): je Knecht über 20 −0,5 %');
+  near(E.rates(s).scrap, 0.3 * 0.95, 'Schrott × 0,95');
+});
+
+test('Zeit bis bezahlbar', () => {
+  const s = fresh();
+  s.bld.hydroFarm = 2;                                       // Sonnenzeit: 1,25 Vorräte/s
+  assert.strictEqual(E.eta(s, { supplies: 0 }), 0);
+  near(E.eta(s, { supplies: 15 }), 12, 'Sekunden bis 15 Vorräte');
+  assert.strictEqual(E.eta(s, { supplies: 500 }), Infinity); // Lager zu klein
+  assert.strictEqual(E.eta(s, { scrap: 5 }), Infinity);      // kein Ertrag
+  const hungry = fresh();
+  hungry.serfs = 2;
+  assert.strictEqual(E.eta(hungry, { supplies: 10 }), Infinity);
+  hungry.res.scrap = 10;
+  assert.strictEqual(E.eta(hungry, { scrap: 5 }), 0);
+});
+
+test('Speichern und Laden', () => {
+  const s = fresh('ws');
+  s.res.supplies = 12.5; s.bld.hydroFarm = 3; s.serfs = 2; s.jobs.scrapper = 1; s.tech.calendar = true; s.seen.serfs = true;
+  s.time = 1234.5; s.savedAt = 1790000000000; s.arrival = 7; s.hungry = 12; s.isHungry = true;
+  E.honor(s, 'Test-Ehre');
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));   // jedes Feld kommt zurück
+  const old = E.load(JSON.stringify({ v: 1, chapter: 'um', res: { supplies: 5 } }));
+  assert.deepStrictEqual([old.res.supplies, old.bld.quarters, old.chapter], [5, 0, 'um']);
+  assert.throws(() => E.load('{"hallo":1}'));
+  assert.throws(() => E.load(JSON.stringify({ v: 1, chapter: 'orks' })));
+  assert.throws(() => E.load('kaputt'));
+  const odd = E.load(JSON.stringify({ v: 1, chapter: 'da', serfs: 1, jobs: { scrapper: 5 }, res: { supplies: 1e9 } }));
+  assert.strictEqual(E.free(odd), 0);
+  assert.strictEqual(odd.res.supplies, 200);
+  const huge = E.load(JSON.stringify({ v: 1, chapter: 'da', serfs: 1, jobs: { scrapper: 1e300 } }));   // darf nicht hängen
+  assert.strictEqual(E.free(huge), 0);
+  const long = fresh();
+  for (let i = 0; i < 150; i++) E.log(long, 'Zeile ' + i);
+  assert.deepStrictEqual([long.log.length, long.log[0].text], [D.rules.logMax, 'Zeile 50']);   // älteste fallen raus
+  const wild = E.load(JSON.stringify({ v: 1, chapter: 'da', time: 1e300, arrival: 1e9, hungry: 1e9,
+    meta: { honors: [{ date: 1, chapter: 'x', text: 'kaputt' }, { date: 'd', chapter: 'c', text: 't' }] } }));
+  assert.ok(wild.time <= 1e10 && wild.arrival <= D.rules.arrivalEvery && wild.hungry <= D.rules.fleeAfter);
+  assert.deepStrictEqual(wild.meta.honors, [{ date: 'd', chapter: 'c', text: 't' }]);
+});
+
+test('Laden rechnet Lager mit den geladenen Gebäuden', () => {
+  const s = E.load(JSON.stringify({ v: 1, chapter: 'da', bld: { storehouse: 1 }, res: { supplies: 340 } }));
+  assert.strictEqual(s.res.supplies, 340);                   // 200 + 150 Lager
+});
+
+test('Unbekannte Namen tun nichts', () => {
+  const s = fresh();
+  s.res.supplies = s.res.scrap = s.res.knowledge = 50; s.serfs = 1;
+  const before = E.save(s);
+  for (const id of ['constructor', 'toString', '__proto__', 'nope']) {
+    assert.strictEqual(E.build(s, id) || E.research(s, id) || E.assign(s, id, 1) || E.click(s, id)
+      || E.scout(s, id) || E.setOffice(s, id, 1), false, id);
+  }
+  assert.strictEqual(E.save(s), before);
+});
+
+test('Offline: simulate wie viele step(1), höchstens 3 Tage', () => {
+  const setup = () => {
+    const s = fresh();
+    s.bld.hydroFarm = 4; s.bld.quarters = 3; s.res.supplies = 50; s.res.scrap = 5;
+    return s;
+  };
+  const a = setup(), b = setup();
+  const sum = E.simulate(a, 3600);
+  for (let i = 0; i < 3600; i++) E.step(b, 1);
+  // Flair-Zeilen gibt es nur beim Zuschauen, nicht beim Nachholen: ohne sie muss alles gleich sein
+  const same = x => {
+    const o = JSON.parse(E.save(x));
+    o.log = o.log.map(l => l.text).filter(t => !D.flair.includes(t));
+    delete o.logSeq; delete o.flairIn;
+    return JSON.stringify(o);
+  };
+  assert.strictEqual(same(a), same(b));
+  assert.strictEqual(sum.seconds, 3600);
+  assert.strictEqual(sum.serfs, a.serfs);
+  const c = setup();
+  assert.strictEqual(E.simulate(c, 10 * 86400).seconds, D.rules.offlineMax);
+  assert.strictEqual(c.time, D.rules.offlineMax);
+  assert.strictEqual(E.simulate(fresh(), NaN).seconds, 0);
+});
+
+test('8 Std. offline: eine gut versorgte Festung übersteht jede Frostzeit', () => {
+  const s = fresh();
+  s.tech.hydroponics = true; s.seen.serfs = true; s.res.supplies = 200;
+  s.bld.quarters = 5; s.bld.hydroFarm = 10; s.serfs = 6; s.jobs.farmer = 4; s.jobs.scrapper = 2;
+  const lines = s.logSeq;
+  E.simulate(s, 8 * 3600);
+  assert.deepStrictEqual([s.serfs, s.jobs.farmer, s.jobs.scrapper, s.isHungry], [10, 4, 2, false]);
+  assert.ok(s.logSeq - lines <= 5, `${s.logSeq - lines} neue Log-Zeilen`);
+});
+
+// ---------- Etappe 2: Marines ----------
+
+// Stand mit geweckten Brüdern: Sus-an-Studien erforscht, ein Apothecarion gebaut.
+function awake(ch = 'da') {
+  const s = fresh(ch);
+  Object.assign(s.tech, { storage: true, salvage: true, susan: true });
+  s.res.scrap = 200; s.res.supplies = 200;                  // White Scars zahlen 172,5 Schrott
+  assert.ok(E.build(s, 'apothecarion'));
+  return s;
+}
+
+// Bereit zur Implantation: Zellentrakt und Arena stehen, ein Aspirant und eine Gensaat liegen bereit.
+// Die fünf Brüder sind weggerechnet, damit keine Gensaat nachreift und der Zufall genau steuerbar bleibt.
+function ready(ch = 'da') {
+  const s = awake(ch);
+  Object.assign(s.tech, { geneseedlore: true, cellcraft: true, trials: true });
+  Object.assign(s.places, { orevein: true, tribes: true });
+  s.res.scrap = 300; s.res.ore = 200; s.res.supplies = 200;
+  s.bld.hydroFarm = 20;                                      // auch im Frost genug für neue Brüder (Effekte rechnet build neu)
+  assert.ok(E.build(s, 'cells') && E.build(s, 'arena'));
+  s.marines.brothers = 0;
+  s.res.aspirants = 1; s.res.geneseed = 1;
+  return s;
+}
+
+// Zufall aus einer festen Liste, danach 0,5; hinterher wieder der alte Zufall.
+function withRng(values, fn) {
+  const old = E.rng;
+  let i = 0;
+  E.rng = () => (i < values.length ? values[i++] : 0.5);
+  try { fn(); } finally { E.rng = old; }
+}
+
+test('Brüder erwachen mit dem ersten Apothecarion', () => {
+  const s = fresh();
+  Object.assign(s.tech, { storage: true, salvage: true, susan: true });
+  s.res.scrap = 400; s.res.supplies = 250;
+  assert.deepStrictEqual([s.marines.coma, s.marines.brothers], [5, 0]);
+  near(E.rates(s).supplies, 0, 'im Koma essen sie nichts');
+  assert.ok(E.build(s, 'apothecarion'));
+  assert.deepStrictEqual([s.marines.coma, s.marines.brothers], [0, 5]);
+  assert.match(s.log.at(-1).text, /5 Brüder öffnen die Augen/);
+  assert.strictEqual(s.meta.honors.at(-1).text, 'Die Brüder erwachen aus dem Sus-an-Koma.');
+  near(E.rates(s).supplies, -5 * 0.4, 'fünf Brüder essen 0,4/s');
+  assert.ok(E.build(s, 'apothecarion'));
+  assert.strictEqual(s.marines.brothers, 5);                 // nur das erste weckt
+  assert.deepStrictEqual([E.marineCap(s), E.marinesUsed(s), E.freeBrothers(s)], [5, 5, 5]);
+});
+
+test('Aufklärung: Absturzstelle bringt Gensaat und Schrott, der Bruder kommt zurück', () => {
+  const s = awake();
+  s.res.scrap = 0; s.res.geneseed = 3;
+  assert.strictEqual(E.placeState(s, 'crashsite'), 'open');
+  assert.ok(E.scout(s, 'crashsite'));
+  assert.strictEqual(E.scout(s, 'crashsite'), false);        // schon unterwegs
+  assert.deepStrictEqual([E.placeState(s, 'crashsite'), E.freeBrothers(s)], ['away', 4]);
+  E.step(s, 59);
+  assert.strictEqual(E.placeState(s, 'crashsite'), 'away');
+  E.step(s, 1);
+  assert.deepStrictEqual([E.placeState(s, 'crashsite'), E.freeBrothers(s)], ['done', 5]);
+  near(s.res.geneseed, 6, 'Gensaat aus der Kammer, Lager 3 + 3 gedeckelt');
+  near(s.res.scrap, 40, 'Schrott aus dem Wrack');
+  assert.strictEqual(E.scout(s, 'crashsite'), false);        // schon entdeckt
+  assert.match(s.log.at(-1).text, /Absturzstelle entdeckt/);
+  assert.strictEqual(s.meta.honors.at(-1).text, 'Ort entdeckt: Absturzstelle.');
+});
+
+test('Aufklärung braucht einen freien Bruder; White Scars schneller, Sturmzeit langsamer', () => {
+  const none = fresh();
+  none.tech.susan = true;
+  assert.strictEqual(E.scout(none, 'crashsite'), false);     // alle im Koma
+  const ws = awake('ws');
+  assert.ok(E.scout(ws, 'crashsite'));
+  near(ws.scouts[0].left, 60 * 0.7, 'White Scars −30 %');
+  const storm = awake();
+  storm.time = 250;
+  assert.ok(E.scout(storm, 'orevein'));
+  near(storm.scouts[0].left, 180 * 1.25, 'Sturmzeit +25 %');
+});
+
+test('Orte: entdeckte und die nächsten zwei sind sichtbar, der Rest nicht', () => {
+  const s = awake();
+  const states = () => ['crashsite', 'orevein', 'tribes', 'ashwaste'].map(id => E.placeState(s, id));
+  assert.deepStrictEqual(states(), ['open', 'open', 'hidden', 'hidden']);
+  assert.strictEqual(E.scout(s, 'tribes'), false);           // noch verborgen
+  s.places.crashsite = true;
+  assert.deepStrictEqual(states(), ['done', 'open', 'open', 'hidden']);   // Aschewüste braucht Kampfdoktrin
+  s.places.orevein = true; s.tech.doctrine = true;
+  assert.deepStrictEqual(states(), ['done', 'done', 'open', 'open']);
+});
+
+test('Orte schalten frei: Mine und Erz nach der Erzader, Zuzug +10 % nach dem Stammesland', () => {
+  const s = awake();
+  assert.strictEqual(E.isUnlocked(s, byId(D.buildings, 'mine')), false);
+  assert.strictEqual(E.isUnlocked(s, byId(D.resources, 'ore')), false);
+  assert.ok(E.scout(s, 'orevein'));
+  E.step(s, 180);
+  assert.ok(E.isUnlocked(s, byId(D.buildings, 'mine')));
+  assert.ok(E.isUnlocked(s, byId(D.resources, 'ore')));
+  assert.ok(E.isUnlocked(s, byId(D.techs, 'cellcraft')));
+  const t = awake();
+  t.places.crashsite = true;                                 // damit das Stammesland sichtbar ist
+  assert.ok(E.scout(t, 'tribes'));
+  E.step(t, 300);
+  near(E.effects(t)['arrival.bonus'] || 0, 0.1, 'Zuzug +10 %');
+});
+
+test('Prüfungsarena: Aspiranten kommen langsam, Lager 2 je Arena, sie essen 0,3/s', () => {
+  const s = awake();
+  s.tech.trials = true; s.res.scrap = 200; s.res.ore = 100; s.res.supplies = 200;
+  assert.ok(E.build(s, 'arena'));
+  near(E.rates(s).aspirants, 0.001, 'Aspiranten je Sekunde');
+  near(E.cap(s, 'aspirants'), 2, 'Lager 2');
+  s.res.aspirants = 1;
+  near(E.rates(s).supplies, -5 * 0.4 - 0.3, 'Brüder und ein Aspirant essen');
+  const um = awake('um');
+  um.tech.trials = true; um.res.scrap = 200; um.res.ore = 100;
+  assert.ok(E.build(um, 'arena'));
+  near(E.cap(um, 'aspirants'), 2, 'Ultramarines: kein Lagerbonus auf Aspiranten');
+});
+
+test('Implantation: Erfolg ergibt einen Neophyten, nach 900 s einen Kampfbruder', () => {
+  const s = ready();
+  withRng([0.1], () => {
+    E.step(s, 1);
+    assert.deepStrictEqual([s.marines.implants.length, s.res.aspirants < 1, s.res.geneseed < 1], [1, true, true]);
+    E.step(s, 300);
+  });
+  assert.deepStrictEqual([s.marines.implants.length, s.marines.neophytes.length], [0, 1]);
+  assert.match(s.log.at(-1).text, /übersteht die Implantate/);
+  assert.ok(s.meta.honors.some(h => h.text === 'Erster eigener Neophyt.'));
+  E.step(s, 900);
+  assert.deepStrictEqual([s.marines.neophytes.length, s.marines.brothers], [0, 1]);
+  assert.match(s.log.at(-1).text, /Kampfbruder/);
+});
+
+test('Implantation: Fehlschlag ergibt Servitor oder Tod, bei Space Wolves auch Wulfen', () => {
+  const outcome = (ch, rolls) => {
+    const s = ready(ch);
+    withRng(rolls, () => E.step(s, 301));
+    return [s.marines.neophytes.length, s.marines.servitors, s.marines.wulfen, s.log.at(-1).text];
+  };
+  const servitor = outcome('da', [0.9, 0.2]);                // Fehlschlag, dann Servitor
+  assert.deepStrictEqual(servitor.slice(0, 3), [0, 1, 0]);
+  assert.match(servitor[3], /Servitor/);
+  const dead = outcome('da', [0.9, 0.7]);                    // Fehlschlag, dann Tod
+  assert.deepStrictEqual(dead.slice(0, 3), [0, 0, 0]);
+  assert.match(dead[3], /stirbt/);
+  const wulf = outcome('sw', [0.7, 0.3]);                    // Space Wolves: 0,7 ≥ 65 %, dann Wulf
+  assert.deepStrictEqual(wulf.slice(0, 3), [0, 0, 1]);
+  assert.match(wulf[3], /Wulf/);
+  assert.strictEqual(outcome('da', [0.7])[0], 1);            // 0,7 < 75 %: Erfolg
+});
+
+test('Implantation braucht Lehre, Aspirant, Gensaat, Implantationsplatz und Brüder-Platz', () => {
+  const s = ready();
+  s.tech.geneseedlore = false;
+  assert.strictEqual(E.implantBlock(s), 'lore');
+  s.tech.geneseedlore = true;
+  assert.strictEqual(E.implantBlock(s), null);
+  s.res.aspirants = 0.9;
+  assert.strictEqual(E.implantBlock(s), 'aspirant');
+  s.res.aspirants = 1; s.res.geneseed = 0.5;
+  assert.strictEqual(E.implantBlock(s), 'geneseed');
+  s.res.geneseed = 2; s.marines.implants = [100];
+  assert.strictEqual(E.implantBlock(s), 'slot');             // ein Apothecarion = ein Platz
+  s.marines.implants = []; s.marines.brothers = 10;          // Wrack 5 + Zellentrakt 5 voll
+  assert.strictEqual(E.implantBlock(s), 'cells');
+});
+
+test('Implantation wartet, solange die Vorräte auch im Frost keinen weiteren Bruder ernähren', () => {
+  const s = ready();
+  s.marines.brothers = 3; s.bld.hydroFarm = 0; s._eff = null; // essen 1,2/s, keine Farm
+  assert.strictEqual(E.implantBlock(s), 'food');
+  s.bld.hydroFarm = 7; s._eff = null;                        // Frost: 7 × 0,5 × 0,5 = 1,75 − 1,2 − 0,3 = 0,25 < 0,4
+  assert.strictEqual(E.implantBlock(s), 'food');
+  near(E.leanFood(s), 0.25, 'Überschuss im Frost');
+  s.bld.hydroFarm = 8; s._eff = null;                        // 2 − 1,5 = 0,5 ≥ 0,4
+  assert.strictEqual(E.implantBlock(s), null);
+});
+
+test('Apothecarius macht Implantationen schneller und sicherer, Übungskäfige die Ausbildung', () => {
+  const s = ready();
+  s.marines.brothers = 2;
+  assert.ok(E.setOffice(s, 'apothecary', 1));
+  withRng([0.8], () => E.step(s, 1 + 240));                  // 300 s × 0,8 = 240 s; 0,8 < 85 %: Erfolg
+  assert.deepStrictEqual([s.marines.implants.length, s.marines.neophytes.length], [0, 1]);
+  s.tech.drill = true; s.res.ore = 1000; s.res.scrap = 1000;
+  for (let i = 0; i < 6; i++) assert.ok(E.build(s, 'cages'), `Käfig ${i + 1}`);
+  E.step(s, 450);                                            // höchstens −50 %: 900 s × 0,5
+  assert.deepStrictEqual([s.marines.neophytes.length, s.marines.brothers], [0, 3]);
+});
+
+test('Gensaat reift in Kampfbrüdern, bei Salamanders langsamer', () => {
+  near(E.rates(awake()).geneseed, 5 * 0.0005, 'fünf Brüder');
+  near(E.rates(awake('sal')).geneseed, 5 * 0.0005 * 0.75, 'Salamanders −25 %');
+});
+
+test('Servitoren sammeln Schrott und essen nichts', () => {
+  const s = fresh();
+  s.marines.servitors = 2;
+  near(E.rates(s).scrap, 2 * 0.15, 'Schrott');
+  near(E.rates(s).supplies, 0, 'essen nichts');
+});
+
+test('Ämter: nur mit freien Brüdern; Scriptor bringt Wissen; Runenpriester bei Space Wolves', () => {
+  const s = awake();
+  assert.strictEqual(E.setOffice(s, 'scriptor', 1), false);  // Librarius fehlt
+  s.tech.librarius = true;
+  for (let i = 0; i < 5; i++) assert.ok(E.setOffice(s, 'scriptor', 1));
+  assert.strictEqual(E.setOffice(s, 'scriptor', 1), false);  // keiner mehr frei
+  assert.strictEqual(E.freeBrothers(s), 0);
+  assert.strictEqual(E.scout(s, 'crashsite'), false);
+  near(E.rates(s).knowledge, 5 * 0.5, 'fünf Scriptoren');
+  assert.ok(E.setOffice(s, 'scriptor', -1));
+  assert.strictEqual(E.setOffice(s, 'scriptor', 0), false);
+  assert.strictEqual(E.officeName(awake('sw'), 'scriptor'), 'Runenpriester');
+  assert.strictEqual(E.officeName(s, 'scriptor'), 'Scriptor');
+});
+
+test('Speichern und Laden mit Marines, Import-Schutz', () => {
+  const s = ready();
+  Object.assign(s.marines, { neophytes: [400.5], implants: [12], servitors: 2, wulfen: 1, brothers: 4 });
+  s.offices.apothecary = 1; s.scouts = [{ place: 'crashsite', left: 30 }];
+  s.res.scrap = 100;                                         // unter dem Lager, sonst deckelt das Laden
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
+  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da',
+    marines: { coma: 2, brothers: 3, neophytes: [5, 'x', -1, 1e9], implants: 'kaputt', servitors: -4 },
+    offices: { apothecary: 9, scriptor: 1 },
+    scouts: [{ place: 'nope', left: 5 }, { place: 'orevein', left: 1e12 }, { place: 'orevein', left: 3 }],
+    places: { crashsite: true, nope: true } }));
+  assert.deepStrictEqual(bad.marines, { coma: 2, brothers: 3, neophytes: [5, 900], implants: [], servitors: 0, wulfen: 0 });
+  assert.deepStrictEqual(bad.scouts, [{ place: 'orevein', left: 225 }]);
+  assert.deepStrictEqual(bad.offices, { apothecary: 2, scriptor: 0, priest: 0, techmarine: 0 });   // 3 Brüder − 1 unterwegs
+  assert.deepStrictEqual(bad.places, { crashsite: true });
+});
+
+// ---------- Etappe 3: Kampf ----------
+
+// Kampfbereit: Kampfdoktrin und Waffenkunde, Aschewüste entdeckt, zehn freie Brüder.
+function armed(ch = 'da') {
+  const s = awake(ch);
+  Object.assign(s.tech, { geneseedlore: true, drill: true, doctrine: true, weaponlore: true });
+  Object.assign(s.places, { crashsite: true, orevein: true, tribes: true, ashwaste: true });
+  s._eff = null;                                             // Orte geändert: Effekte neu rechnen
+  s.marines.brothers = 10;
+  s.res.supplies = 200;
+  return s;
+}
+
+test('Kampf: Chance aus Stärke und Bedrohung, Kampfkraft mit Boni', () => {
+  const s = armed();
+  near(E.power(s, 3, 0), 30, 'drei Brüder');
+  near(E.power(s, 1, 1), 30, 'ein Bruder und ein Wulf');
+  near(E.chance(s, 'raiders', 3), 0.5, 'r = 1');
+  near(E.chance(s, 'raiders', 6), 0.9, 'r = 2');
+  near(E.chance(s, 'groxhunt', 1), 0.1, 'r = 0,5');
+  near(E.chance(s, 'groxhunt', 10), 0.95, 'höchstens 95 %');
+  near(E.chance(s, 'orkcamp', 1), 0.05, 'mindestens 5 %');
+  near(E.power(armed('ba'), 3, 0), 36, 'Blood Angels +20 %');
+});
+
+test('Entsenden: Lehre und Ort nötig, Truppgröße im Rahmen, Wulfen zuerst, je Einsatz ein Trupp', () => {
+  const s = armed();
+  assert.strictEqual(E.sendMission(s, 'raiders', 2), false);   // zu klein
+  assert.strictEqual(E.sendMission(s, 'raiders', 6), false);   // zu groß
+  assert.strictEqual(E.sendMission(s, 'nope', 3), false);
+  s.marines.wulfen = 1;
+  assert.ok(E.sendMission(s, 'raiders', 3));
+  assert.deepStrictEqual(s.missions[0], { id: 'raiders', brothers: 2, wulfen: 1, left: 240 });
+  assert.strictEqual(E.sendMission(s, 'raiders', 3), false);   // schon unterwegs
+  assert.deepStrictEqual([E.freeBrothers(s), E.freeWulfen(s)], [8, 0]);
+  assert.ok(E.sendMission(s, 'groxhunt', 3));
+  assert.strictEqual(E.freeBrothers(s), 5);
+  const locked = awake();
+  locked.marines.brothers = 10;
+  assert.strictEqual(E.sendMission(locked, 'groxhunt', 2), false);   // Kampfdoktrin fehlt
+  const few = armed();
+  few.marines.brothers = 2;
+  assert.strictEqual(E.sendMission(few, 'raiders', 3), false);         // zu wenig freie Kämpfer
+});
+
+test('Einsatz gewonnen: Beute, Ruhm, weniger Bedrohung, alle kommen zurück', () => {
+  const s = armed();
+  s.threat = 50;
+  assert.ok(E.sendMission(s, 'raiders', 5));                          // r = 50/30: Chance ≈ 79 %
+  withRng([0.1, 0.9, 0.9, 0.9, 0.9, 0.9], () => E.step(s, 240));      // Sieg, niemand fällt
+  assert.deepStrictEqual([s.missions.length, E.freeBrothers(s), s.marines.brothers], [0, 10, 10]);
+  near(s.res.scrap, 50 + 60, 'Schrott');
+  near(s.res.renown, 5, 'Ruhm');
+  near(s.threat, 50 + 240 * 0.01 - 10, 'Bedrohung sinkt');
+  assert.match(s.log.at(-1).text, /^Sieg: Ork-Plünderer vertreiben\. \+60 Schrott, \+5 Ruhm\.$/);
+  assert.ok(s.meta.honors.some(h => h.text === 'Erster Kampfeinsatz: Ork-Plünderer vertreiben.'));
+});
+
+test('Verluste: Gensaat-Bergung mit Apothecarius; Fehlschlag ohne Beute', () => {
+  const s = armed();
+  assert.ok(E.setOffice(s, 'apothecary', 1));
+  const scrap = s.res.scrap;
+  assert.ok(E.sendMission(s, 'orkcamp', 5));                          // r = 50/120: Chance 5 %
+  // Niederlage; Bruder 1 fällt (Gensaat geborgen, 60 %), Bruder 3 fällt (nicht geborgen)
+  withRng([0.5, 0.1, 0.3, 0.9, 0.2, 0.7, 0.9, 0.9], () => E.step(s, 1200));
+  assert.strictEqual(s.marines.brothers, 8);
+  near(s.res.scrap, scrap, 'keine Beute');
+  const lines = s.log.slice(-2).map(l => l.text);
+  assert.match(lines[0], /^Rückzug: Ork-Lager zerschlagen/);
+  assert.match(lines[1], /^Gefallen: .* Gensaat geborgen: 1\.$/);
+  assert.ok(s.meta.honors.some(h => h.text.startsWith('Der erste Bruder fällt:')));
+});
+
+test('Beute: Space Wolves +25 %, Dark Angels Archäotech +50 %', () => {
+  const sw = armed('sw');
+  assert.ok(E.sendMission(sw, 'groxhunt', 3));
+  withRng([0.1, 0.9, 0.9, 0.9], () => E.step(sw, 300));
+  near(sw.res.grox, 12.5, 'Grox × 1,25');
+  const da = armed('da');
+  assert.ok(E.sendMission(da, 'wreckfields', 5));
+  withRng([0.1, 0.05, 0.9, 0.9, 0.9, 0.9, 0.9], () => E.step(da, 600));   // Sieg, Glücksfund, niemand fällt
+  near(da.res.archeotech, 1.5, 'Archäotech × 1,5');
+  assert.ok(E.isUnlocked(da, byId(D.resources, 'archeotech')));
+});
+
+test('Einsatzbefehl: der Trupp zieht nach der Rückkehr wieder los; ohne Einsatzplanung nur White Scars', () => {
+  const s = armed();
+  assert.strictEqual(E.setOrder(s, 'groxhunt', 2), false);            // Einsatzplanung fehlt
+  s.tech.planning = true;
+  assert.strictEqual(E.setOrder(s, 'groxhunt', 9), false);            // Truppgröße außerhalb des Rahmens
+  assert.ok(E.setOrder(s, 'groxhunt', 2));
+  E.step(s, 1);                                                       // der Befehl schickt den Trupp gleich los
+  assert.strictEqual(s.missions.length, 1);
+  withRng([0.1, 0.9, 0.9], () => E.step(s, 300));
+  assert.strictEqual(s.missions.length, 1);                           // nach der Rückkehr wieder unterwegs
+  assert.ok(E.setOrder(s, 'groxhunt', 0));                            // Befehl aufheben
+  assert.deepStrictEqual(s.orders, {});
+  assert.ok(E.setOrder(armed('ws'), 'groxhunt', 2));                  // White Scars ab Start
+});
+
+test('Bedrohung wächst ab der Aschewüste; Überfall alle 300 s, wenn sie die Verteidigung übersteigt', () => {
+  const s = armed();
+  s.marines.brothers = 0;
+  s.res.supplies = 100; s.res.scrap = 100; s.res.ore = 50;
+  near(E.defense(s), 0, 'niemand daheim');
+  E.step(s, 299);
+  near(s.threat, 2.99, 'Bedrohung +0,01/s');
+  assert.strictEqual(s.res.scrap, 100);
+  E.step(s, 1);
+  near(s.res.scrap, 90, 'Schrott −10 %');
+  near(s.res.ore, 45, 'Erz −10 %');
+  near(s.res.supplies, 90, 'Vorräte −10 %');
+  assert.match(s.log.at(-1).text, /^Ork-Überfall!/);
+  const t = armed();
+  t.marines.brothers = 0; t.serfs = 2; t.bld.hydroFarm = 20; t._eff = null; t.threat = 100;
+  withRng([0.1], () => E.step(t, 300));
+  assert.strictEqual(t.serfs, 1);
+  assert.match(t.log.at(-1).text, /verschleppt/);
+  const d = armed();
+  near(E.defense(d), 100, 'zehn Brüder daheim');
+  d.tech.fortify = true; d.res.ore = 500; d.res.scrap = 500;
+  assert.ok(E.build(d, 'bastion'));
+  near(E.defense(d), 120, 'Bastion +20');
+  d.tech.librarius = true;
+  assert.ok(E.setOffice(d, 'scriptor', 1));
+  near(E.defense(d), 115, 'Amtsträger zählen halb');
+  const o = armed();
+  o.marines.brothers = 0; o.threat = 400; o.res.scrap = 100;
+  E.simulate(o, 3600);                                                // 12 Prüfungen, offline höchstens 3 Überfälle
+  near(o.res.scrap, 100 * 0.9 ** 3, 'drei Überfälle');
+});
+
+test('Grox-Fleisch hebt die Moral und wird gegessen; Archivum vergrößert das Wissen-Lager prozentual', () => {
+  const s = fresh();
+  s.serfs = 10; s.bld.hydroFarm = 10; s.res.grox = 1; s.res.supplies = 200;
+  near(E.moral(s), 1.1, 'Luxus +10 %');
+  near(E.rates(s).grox, -0.01, '10 Knechte essen 0,001/s');
+  E.step(s, 100);
+  near(s.res.grox, 0, 'aufgegessen');
+  near(E.moral(s), 1, 'ohne Grox');
+  near(E.rates(s).grox, 0, 'nichts mehr zu essen');
+  const a = fresh();
+  a.bld.scriptorium = 2; a.bld.archivum = 2;
+  near(E.cap(a, 'knowledge'), (100 + 200) * 1.4, 'zwei Archive +40 %');
+});
+
+test('Speichern und Laden mit Einsätzen, Befehlen und Bedrohung', () => {
+  const s = armed();
+  s.tech.planning = true;
+  assert.ok(E.sendMission(s, 'raiders', 4));
+  assert.ok(E.setOrder(s, 'groxhunt', 2));
+  s.threat = 123.4; s.raidTimer = 77;
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
+  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', marines: { brothers: 3 },
+    missions: [{ id: 'raiders', brothers: 5, wulfen: 0, left: 10 }, { id: 'nope', brothers: 1, wulfen: 0, left: 5 },
+      { id: 'groxhunt', brothers: 2, wulfen: 3, left: 1e9 }, { id: 'groxhunt', brothers: 2, wulfen: 0, left: 1e9 }],
+    orders: { raiders: 4, nope: 2, groxhunt: 99 }, threat: 1e9, raidTimer: -5 }));
+  assert.deepStrictEqual(bad.missions, [{ id: 'groxhunt', brothers: 2, wulfen: 0, left: 375 }]);
+  assert.deepStrictEqual(bad.orders, { raiders: 4 });
+  assert.deepStrictEqual([bad.threat, bad.raidTimer], [500, 0]);
+});
+
+// ---------- Etappe 4: Schmiede ----------
+
+// Mit Schmiede: Schmiedekunst, Raffination und Datenarchive erforscht, eine Schmiede steht.
+function forged(ch = 'da') {
+  const s = armed(ch);
+  Object.assign(s.tech, { smithing: true, refining: true, archives: true });
+  s.res.ore = 200; s.res.scrap = 200;
+  assert.ok(E.build(s, 'forge'));
+  return s;
+}
+
+test('Schmiede: Ausbeute +6 % je Schmiede, „max“, nichts ohne Schmiede oder Lehre', () => {
+  const s = forged();
+  s.res.scrap = 120;
+  assert.ok(E.craft(s, 'plasteel', 1));
+  near(s.res.plasteel, 1.06, 'eine Schmiede: +6 %');
+  near(s.res.scrap, 70, 'Schrott bezahlt');
+  assert.ok(E.craft(s, 'plasteel', 'max'));                 // 70 Schrott reichen für einmal
+  near(s.res.plasteel, 2.12, 'zweimal');
+  assert.strictEqual(E.craft(s, 'plasteel', 1), false);     // zu wenig Schrott
+  assert.strictEqual(E.craftCount(s, 'plasteel'), 0);
+  s.res.scrap = 500;
+  assert.ok(E.craft(s, 'plasteel', 10));
+  near(s.res.scrap, 0, 'zehnmal');
+  assert.strictEqual(E.craft(s, 'plasteel', 0), false);
+  assert.strictEqual(E.craft(s, 'datatablet', 1), false);   // kein Wissen
+  const none = armed();
+  none.tech.smithing = true; none.res.scrap = 100;
+  assert.strictEqual(E.craft(none, 'plasteel', 1), false);  // keine Schmiede
+  const sal = forged('sal');
+  sal.res.scrap = 50;
+  assert.ok(E.craft(sal, 'plasteel', 1));
+  near(sal.res.plasteel, 1.31, 'Salamanders +25 % und eine Schmiede +6 %');
+});
+
+test('Servitoren stellen das gewählte Rezept aus Überschuss her und sammeln dann keinen Schrott mehr', () => {
+  const s = forged();
+  s.marines.servitors = 5; s.res.scrap = 150;
+  near(E.rates(s).scrap, 0.75, 'ohne Rezept: 5 × 0,15 Schrott');
+  assert.ok(E.setServitorRecipe(s, 'plasteel'));
+  near(E.rates(s).scrap, 0, 'mit Rezept kein Schrott');
+  E.step(s, 10);                                            // 5 × 0,02 × 10 s = 1 Ausführung
+  near(s.res.plasteel, 1.06, 'ein Plastahl');
+  near(s.res.scrap, 100, '50 Schrott verbraucht');
+  E.step(s, 10);                                            // Lager unter 90 %: nichts mehr
+  near(s.res.plasteel, 1.06, 'nur Überschuss');
+  assert.strictEqual(E.setServitorRecipe(s, 'nope'), false);
+  assert.ok(E.setServitorRecipe(s, null));
+  near(E.rates(s).scrap, 0.75, 'wieder Schrott');
+});
+
+test('Verbesserungen: sichtbar mit freigeschalteten Waren, wirken sofort, nur einmal', () => {
+  const early = forged();
+  early.tech.refining = false;                              // ohne Raffination kein Ceramit
+  early.bld.scriptorium = 1;                                // Wissen freigeschaltet
+  assert.strictEqual(E.upgradeVisible(early, 'godwyn'), false);
+  assert.ok(E.upgradeVisible(early, 'spades'));
+  const s = forged();
+  s.bld.scriptorium = 1; s.tech.hydroponics = true; s.serfs = 1; s.jobs.farmer = 1;
+  const before = E.rates(s).supplies;
+  s.res.plasteel = 10; s.res.knowledge = 300;
+  assert.ok(E.buyUpgrade(s, 'spades'));
+  near(E.rates(s).supplies - before, 1.25 * 0.25, 'Bauer +25 %');
+  assert.strictEqual(E.buyUpgrade(s, 'spades'), false);     // nur einmal
+  assert.match(s.log.at(-1).text, /Verstärkte Spaten/);
+  assert.strictEqual(E.buyUpgrade(s, 'nope'), false);
+});
+
+test('Datentafeln vergrößern das Wissen-Lager, Servoschädel und Auspex verkürzen die Aufklärung', () => {
+  const s = forged();
+  const base = E.cap(s, 'knowledge');
+  s.res.datatablet = 3.5;                                   // ganze Stücke zählen
+  near(E.cap(s, 'knowledge'), base + 150, 'drei Tafeln');
+  s.res.servoskull = 5;
+  near(E.missionTime(s, 100, true), 90, 'fünf Schädel −10 %');
+  s.res.servoskull = 50;
+  near(E.missionTime(s, 100, true), 60, 'höchstens −40 %');
+  s.upgrades.auspex = true; s._eff = null;
+  near(E.missionTime(s, 100, true), 35, 'Auspex −25 % dazu');
+  near(E.missionTime(s, 100), 100, 'Kampfeinsätze unverändert');
+});
+
+test('Munitorum-Verwaltung: neue Knechte bekommen die gewählte Aufgabe', () => {
+  const s = fresh();
+  s.bld.quarters = 3; s.bld.hydroFarm = 10; s.res.supplies = 100; s.tech.hydroponics = true;
+  assert.strictEqual(E.setAutoJob(s, 'farmer'), false);     // Munitorum-Verwaltung fehlt
+  s.tech.munitorum = true;
+  assert.strictEqual(E.setAutoJob(s, 'nope'), false);
+  assert.ok(E.setAutoJob(s, 'farmer'));
+  E.step(s, 20);
+  assert.deepStrictEqual([s.serfs, s.jobs.farmer], [1, 1]);
+  assert.ok(E.setAutoJob(s, null));
+});
+
+test('Raffinerie bringt Promethium über Raffineriearbeiter; Hab-Block und Lagerhalle', () => {
+  const s = forged();
+  s.places.promwell = true; s.res.ore = 200; s.res.scrap = 200;
+  assert.ok(E.build(s, 'refinery'));
+  near(E.cap(s, 'promethium'), 120, 'Lager 60 + 60');
+  s.serfs = 2;
+  assert.ok(E.assign(s, 'refiner', 1));
+  near(E.rates(s).promethium, 0.08, 'ein Raffineriearbeiter');
+  s.tech.construction = true; s.res.plasteel = 10; s.res.ore = 100;
+  assert.ok(E.build(s, 'hab'));
+  assert.strictEqual(E.serfCap(s), 5);
+  s.tech.logistics = true; s.res.plasteel = 10; s.res.ceramite = 5;
+  assert.ok(E.build(s, 'warehouse'));
+  near(E.cap(s, 'supplies'), 500, 'Vorräte 200 + 300');
+});
+
+test('Aquila-Rüstung senkt Verluste, Narthecium hilft der Gensaat-Bergung', () => {
+  const s = armed();
+  s.upgrades.aquila = true; s.upgrades.narthecium = true; s._eff = null;
+  assert.ok(E.sendMission(s, 'orkcamp', 5));
+  // Kraft 50 × 1,15 → r ≈ 0,48; Verlust min(50 %, 0,25 ÷ r) × 0,75 = 37,5 %; Bergung 50 % + 20 % = 70 %
+  withRng([0.9, 0.3, 0.65, 0.4, 0.9, 0.9, 0.9], () => E.step(s, 1200));
+  assert.strictEqual(s.marines.brothers, 9);                // 0,4 überlebt nur dank der Rüstung
+  assert.match(s.log.at(-1).text, /Gensaat geborgen: 1\./); // 0,65 klappt nur dank Narthecium
+});
+
+test('Speichern und Laden mit Verbesserungen, Rezept, Aufgabe und Servitor-Arbeit', () => {
+  const s = forged();
+  s.tech.munitorum = true;
+  s.upgrades.spades = true; s.servitorRecipe = 'plasteel'; s.autoJob = 'scrapper'; s.craftAcc = 0.4;
+  s.res.plasteel = 3.18;
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
+  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', upgrades: { spades: true, nope: true, cranes: 'ja' },
+    servitorRecipe: 'nope', autoJob: 'nope', craftAcc: 7 }));
+  assert.deepStrictEqual([bad.upgrades, bad.servitorRecipe, bad.autoJob, bad.craftAcc], [{ spades: true }, null, null, 1]);
+});
+
+// ---------- Etappe 5: Reclusiam ----------
+
+// Mit Reclusiam: Liturgie erforscht, Schrein und Reclusiam stehen, 20 freie Knechte, genug Farmen.
+// Ordens-Ereignisse sind weit weg geschoben, damit der Zufall steuerbar bleibt.
+function devout(ch = 'da') {
+  const s = forged(ch);
+  s.tech.liturgy = true; s.places.cathedral = true; s.eventIn = 1e9;
+  s.res.scrap = 300; s.res.ore = 200; s.res.ceramite = 20; s.res.faith = 100;
+  assert.ok(E.build(s, 'shrine'));
+  assert.ok(E.build(s, 'reclusiam'));
+  s.serfs = 20; s.bld.hydroFarm = 60; s._eff = null; s.res.supplies = 200;
+  return s;
+}
+
+test('Glaube: Prediger, Ordenspriester, Schrein und Reclusiam, Frostzeit ×1,25', () => {
+  const s = devout();
+  assert.ok(E.assign(s, 'preacher', 1) && E.assign(s, 'preacher', 1));
+  assert.ok(E.setOffice(s, 'priest', 1));
+  near(E.rates(s).faith, (2 * 0.05 * 1.03 + 0.2) * 1.15, 'Glaube mit Schrein +5 % und Reclusiam +10 %, Prediger mit Moral');
+  near(E.moral(s), 1 + 2 * 0.005 + 0.02, 'Prediger und Priester heben die Moral');
+  s.time = 750;
+  near(E.rates(s).faith, (0.103 + 0.2) * 1.15 * 1.25, 'Frostzeit ×1,25');
+  near(E.cap(s, 'faith'), 100 + 50 + 100, 'Lager: Schrein +50, Reclusiam +100');
+});
+
+test('Riten: kaufen, wirken, nur einmal; das Fest des Primarchen öffnet zwei Litaneien', () => {
+  const s = devout();
+  s.res.faith = 250;
+  assert.ok(E.buyRite(s, 'arms'));
+  near(s.res.faith, 150, 'Glaube bezahlt');
+  near(E.power(s, 1, 0), 11, 'Kampfkraft +10 %');
+  assert.strictEqual(E.buyRite(s, 'arms'), false);          // nur einmal
+  assert.strictEqual(E.buyRite(s, 'eternal'), false);       // zu teuer
+  assert.strictEqual(E.litanyOpen(s, 'steadfast'), false);
+  s.res.faith = 900;
+  assert.ok(E.buyRite(s, 'feast'));
+  assert.ok(E.litanyOpen(s, 'steadfast'));
+  assert.match(s.log.at(-1).text, /Fest des Primarchen/);
+});
+
+test('Litaneien: kosten Glaube je nach Knechten, halten ein Jahr, erneuern sich', () => {
+  const s = devout();                                       // 20 Knechte: 30 + 2 = 32 Glaube
+  s.res.faith = 100;
+  assert.strictEqual(E.litanyCost(s), 32);
+  assert.ok(E.chooseLitany(s, 'wrath'));
+  near(s.res.faith, 68, 'bezahlt');
+  near(E.power(s, 1, 0), 10 * (1 + 0.3 * 1.05), 'Zorn des Imperators, Reclusiam +5 %');
+  s.res.reliquary = 2;
+  near(E.power(s, 1, 0), 10 * (1 + 0.3 * 1.25), 'mit zwei Reliquiaren +20 %');
+  s.res.reliquary = 0;
+  E.step(s, 999);
+  assert.strictEqual(s.litany, 'wrath');
+  s.res.faith = 50;
+  E.step(s, 1);                                             // Jahr um: erneuert sich
+  assert.deepStrictEqual([s.litany, Math.round(s.res.faith)], ['wrath', 18]);
+  s.res.faith = 0;
+  E.step(s, 1000);                                          // kein Glaube: verklingt
+  assert.strictEqual(s.litany, null);
+  assert.match(s.log.at(-1).text, /verklingt/);
+  assert.strictEqual(E.chooseLitany(s, 'steadfast'), false); // braucht das Fest
+});
+
+test('Große Messe: Frömmigkeit aus dem ganzen Glauben, Produktion + √Frömmigkeit ÷ 10 %', () => {
+  const s = devout();
+  s.res.faith = 0;
+  assert.strictEqual(E.grandMass(s), false);                // nichts zu opfern
+  s.res.faith = 250; s.piety = 9750;
+  assert.ok(E.grandMass(s));
+  assert.deepStrictEqual([s.res.faith, s.piety], [0, 10000]);
+  near(E.productionBonus(s), 0.1, '√10.000 ÷ 10 % = 10 %');
+  s.jobs.scrapper = 1;
+  near(E.rates(s).scrap, 0.3 * 1.1, 'Schrott × 1,1');
+});
+
+test('Kompanien: je 100 Kampfbrüder +5 % Produktion, Ultramarines doppelt, Liber Honoris', () => {
+  const s = armed();
+  s.marines.brothers = 250;
+  near(E.productionBonus(s), 0.1, 'zwei volle Kompanien');
+  E.step(s, 1);
+  assert.ok(s.meta.honors.some(h => h.text === 'Die 2. Kompanie ist vollständig.'));
+  const um = armed('um');
+  um.marines.brothers = 100;
+  near(E.productionBonus(um), 0.1, 'Ultramarines: 10 % je Kompanie');
+});
+
+test('Blood Angels: Roter Durst, Schwarzer Zorn und Todeskompanie', () => {
+  const s = armed('ba');
+  s.thirst = 97;
+  assert.ok(E.sendMission(s, 'groxhunt', 2));
+  withRng([0.1, 0.9, 0.9], () => E.step(s, 300));           // Sieg, Durst +5: Schwarzer Zorn
+  assert.deepStrictEqual([s.deathCompany, s.thirst, s.marines.brothers], [1, 50, 9]);
+  assert.match(s.log.at(-1).text, /Schwarzer Zorn/);
+  assert.ok(E.sendMission(s, 'groxhunt', 2));
+  assert.strictEqual(s.missions[0].dc, 1);
+  withRng([0.1, 0.9, 0.9], () => E.step(s, s.missions[0].left)); // Sturmzeit: dauert länger
+  assert.deepStrictEqual([s.deathCompany, s.marines.brothers], [0, 9]);
+  assert.match(s.log.at(-1).text, /Todeskompanie fällt/);
+  const p = armed('ba');
+  p.tech.liturgy = true; p.eventIn = 1e9; p.thirst = 10;
+  assert.ok(E.setOffice(p, 'priest', 1));
+  E.step(p, 100);
+  near(p.thirst, 9, '−0,01/s je Sanguinischem Priester');
+  assert.strictEqual(E.officeName(p, 'priest'), 'Sanguinischer Priester');
+  const da = armed();
+  da.thirst = 99;
+  assert.ok(E.sendMission(da, 'groxhunt', 2));
+  withRng([0.1, 0.9, 0.9], () => E.step(da, 300));
+  assert.strictEqual(da.thirst, 99);                        // andere Orden dürsten nicht
+});
+
+test('Ordens-Ereignisse: Geschenk, Bonus für ein Jahr, Spur eines Gefallenen öffnet die Jagd', () => {
+  const s = armed();                                        // Dark Angels
+  s.tech.liturgy = true; s.eventIn = 1;
+  const hunt = byId(D.missions, 'fallenhunt');
+  assert.strictEqual(E.isUnlocked(s, hunt), false);
+  withRng([1 / 6 + 0.01, 0.5], () => E.step(s, 1));         // Ereignis 2; nächstes in 2.000 × (0,5 + 0,5) s
+  assert.ok(E.isUnlocked(s, hunt));
+  assert.match(s.log.at(-1).text, /Spur eines Gefallenen/);
+  near(s.eventIn, 2000, 'nächstes Ereignis');
+  s.eventIn = 1e9; s.marines.brothers = 12;
+  assert.ok(E.sendMission(s, 'fallenhunt', 10));
+  withRng([0.01, ...Array(10).fill(0.99)], () => E.step(s, 2400));   // Sieg mit 5 % Chance, niemand fällt
+  near(s.res.archeotech, 3 * 1.5, 'Dark Angels: Archäotech +50 %');
+  assert.strictEqual(E.isUnlocked(s, hunt), false);         // die Spur ist kalt
+  const u = armed('um');
+  u.tech.liturgy = true; u.eventIn = 1;
+  withRng([0.01, 0.5], () => E.step(u, 1));                 // Ereignis 1: Knechte-Jobs +10 % für ein Jahr
+  near(E.effects(u)['jobs.bonus'] || 0, 0.1, 'Bonus aktiv');
+  u.eventIn = 1e9;
+  E.step(u, 1000);
+  near(E.effects(u)['jobs.bonus'] || 0, 0, 'nach einem Jahr vorbei');
+  const g = armed('sw');
+  g.tech.liturgy = true; g.eventIn = 1;
+  withRng([0.01, 0.5], () => E.step(g, 1));                 // Ereignis 1: Mjod, 10 Grox-Fleisch
+  near(g.res.grox, 10, 'Geschenk');
+});
+
+test('Speichern und Laden mit Glaube, Litanei, Riten, Boni, Durst und Todeskompanie', () => {
+  const s = devout('ba');
+  Object.assign(s, { litany: 'wrath', litanyLeft: 400, piety: 1234, thirst: 42, deathCompany: 1, companies: 1, eventIn: 777 });
+  s.rites.arms = true;
+  s.boons = [{ key: 'moral.bonus', value: 0.1, left: 300 }];
+  s.missions.push({ id: 'groxhunt', brothers: 2, wulfen: 0, left: 10, dc: 1 });
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
+  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', rites: { arms: true, nope: true }, litany: 'nope', litanyLeft: 1e9,
+    piety: -5, thirst: 400, deathCompany: 7, companies: 3.7, eventIn: -1,
+    boons: [{ key: 'x', value: 0.1, left: 3 }, { key: 'power.bonus', value: 0.2, left: 1e9 }] }));
+  assert.deepStrictEqual([bad.rites, bad.litany, bad.litanyLeft, bad.piety, bad.thirst, bad.deathCompany, bad.companies, bad.eventIn],
+    [{ arms: true }, null, 0, 0, 100, 1, 3, D.rules.eventEvery]);
+  assert.deepStrictEqual(bad.boons, [{ key: 'power.bonus', value: 0.2, left: 1000 }]);
+});
+
+// ---------- Etappe 6: Beziehungen ----------
+
+// Mit Astropathie: Visionen, Ordens- und Welt-Ereignisse sind weit weg geschoben, damit der Zufall steuerbar bleibt.
+function linked(ch = 'da') {
+  const s = forged(ch);
+  s.tech.astropathy = true; s.places.astrostation = true;
+  s.visionIn = 1e9; s.eventIn = 1e9; s.orderTimer = 0;
+  for (const w of D.worldEvents) s.worldIn[w.id] = 1e9;
+  s._eff = null;
+  return s;
+}
+
+test('Visionen: Auto-Fang je Astropathenturm, sonst 15 s zum Antippen; Warpsturm', () => {
+  const s = linked();
+  s.res.plasteel = 100; s.res.ceramite = 100;
+  assert.ok(E.build(s, 'astropathTower'));
+  s.visionIn = 1;
+  withRng([0.05, 0.5], () => E.step(s, 1));                // 5 % < 10 %: Auto-Fang; nächste in 400 × (0,5 + 0,5) s
+  assert.deepStrictEqual([s.res.navdata, s.vision], [1, 0]);
+  near(s.visionIn, 400, 'nächste Vision');
+  s.visionIn = 1;
+  withRng([0.5, 0.5], () => E.step(s, 1));                 // nicht gefangen: 15 s im Kopf
+  near(s.vision, 15, 'Vision sichtbar');
+  E.step(s, 5);
+  assert.ok(E.catchVision(s));
+  assert.deepStrictEqual([s.res.navdata, s.vision], [2, 0]);
+  assert.strictEqual(E.catchVision(s), false);             // schon gefangen
+  s.visionIn = 1;
+  withRng([0.5, 0.5], () => E.step(s, 1));
+  E.step(s, 15);                                           // verfallen
+  assert.strictEqual(E.catchVision(s), false);
+  assert.strictEqual(s.res.navdata, 2);
+  s.storm = 1000; s._eff = null; s.visionIn = 1;
+  E.step(s, 5);                                            // im Warpsturm keine Visionen
+  assert.deepStrictEqual([s.vision, s.res.navdata], [0, 2]);
+  near(E.effects(s)['faith.bonus'] || 0, 0.5, 'Warpsturm: Glaube +50 %');
+});
+
+test('Tausch: Paket gegen Paket, Ausbeute mit Kontor und Stufe, Ansehen und Hilfe je Stufe', () => {
+  const s = linked('um');
+  s.bld.warehouse = 3; s._eff = null;
+  s.res.plasteel = 100; s.res.supplies = 0;
+  assert.ok(E.trade(s, 'varos'));
+  assert.deepStrictEqual([s.res.plasteel, s.res.supplies, s.standing.varos], [96, 500, 1]);
+  assert.match(s.log.at(-1).text, /Tausch mit Agrarwelt Varos/);
+  s.standing.varos = 4;
+  assert.ok(E.trade(s, 'varos'));                           // Ansehen 5: Stufe 1
+  assert.strictEqual(E.standingLevel(s, 'varos'), 1);
+  assert.match(s.log.at(-1).text, /Stufe 1/);
+  near(E.effects(s)['supplies.bonus'] || 0, 0.03, 'Hilfe: Vorräte +3 %');
+  s.tech.trade = true;
+  assert.ok(E.build(s, 'tradeHouse'));
+  s.res.supplies = 0;
+  assert.ok(E.trade(s, 'varos'));
+  near(s.res.supplies, 500 * (1 + 0.05 + 0.1), 'Kontor +5 %, Stufe 1 +10 %');
+  s.res.plasteel = 0;
+  assert.strictEqual(E.trade(s, 'varos'), false);           // nichts zu geben
+  assert.strictEqual(E.trade(s, 'valkar'), false);          // noch kein Kontakt
+  assert.strictEqual(E.trade(s, 'nope'), false);
+  s.bld.quarters = 2; s._eff = null; s.serfs = 3; s.res.supplies = 400;
+  assert.ok(E.trade(s, 'guard'));                           // 2 Knechte, aber nur 1 Platz frei
+  assert.strictEqual(s.serfs, 4);
+  s.seen.valkar = true; s.docked = true; s.res.promethium = 60;
+  assert.ok(E.trade(s, 'valkar'));
+  near(s.res.amasec, 8 * (1 + 0.05 + 0.5), 'Kontor +5 %, im Hafen +50 %');
+  assert.strictEqual(s.docked, false);
+  const d = linked();
+  d.res.plasteel = 10;
+  assert.ok(E.trade(d, 'varos'));
+  near(d.standing.varos, 0.75, 'Dark Angels: Ansehen 25 % langsamer');
+});
+
+test('Daueraufträge: ab Stufe 2, nur aus vollen Lagern, höchstens alle 10 s', () => {
+  const s = linked('um');
+  assert.strictEqual(E.setStandingOrder(s, 'mechanicus', true), false);   // Stufe 0
+  s.standing.mechanicus = 15; s._eff = null;                               // Stufe 2
+  assert.ok(E.setStandingOrder(s, 'mechanicus', true));
+  s.res.archeotech = 9;
+  E.step(s, 10);                                            // Ware ohne Lager: erst ab 5 Paketen
+  assert.strictEqual(s.res.ceramite, 0);
+  s.res.archeotech = 100;
+  E.step(s, 10);
+  near(s.res.ceramite, 15 * 1.2, 'ein Tausch, Stufe 2 +20 %');
+  E.step(s, 20);
+  near(s.res.ceramite, 3 * 18, 'einer je 10 s');
+  assert.ok(E.setStandingOrder(s, 'mechanicus', false));
+  E.step(s, 10);
+  near(s.res.ceramite, 3 * 18, 'aufgehoben');
+  const g = linked('um');
+  g.standing.guard = 15; g.bld.warehouse = 2; g._eff = null;     // Lager größer als das Paket
+  assert.ok(E.setStandingOrder(g, 'guard', true));
+  g.res.supplies = E.cap(g, 'supplies') * 0.5;
+  E.step(g, 10);
+  assert.strictEqual(g.standing.guard, 15);                 // Lager nicht voll: kein Tausch
+  g.res.supplies = E.cap(g, 'supplies');
+  E.step(g, 10);
+  assert.strictEqual(g.standing.guard, 16);
+});
+
+test('Mechanicus: Servitor-Zelle ab Stufe 1, Servitor erschaffen, Techmarine ab Stufe 2', () => {
+  const s = linked();
+  const cell = byId(D.buildings, 'servitorCell'), tm = byId(D.offices, 'techmarine');
+  assert.strictEqual(E.isUnlocked(s, cell), false);
+  s.standing.mechanicus = 5; s._eff = null;
+  assert.ok(E.isUnlocked(s, cell));
+  assert.strictEqual(E.isUnlocked(s, tm), false);
+  s.res.plasteel = 20; s.res.archeotech = 2;
+  assert.ok(E.build(s, 'servitorCell'));
+  s.serfs = 2; s.jobs.scrapper = 2;
+  assert.ok(E.makeServitor(s));
+  assert.deepStrictEqual([s.serfs, s.jobs.scrapper, s.marines.servitors, s.res.plasteel], [1, 1, 1, 7]);
+  s.res.plasteel = 4;
+  assert.strictEqual(E.makeServitor(s), false);             // zu wenig Plastahl
+  s.marines.servitors = 10; s.craftAcc = 0;
+  assert.ok(E.setServitorRecipe(s, 'servoskull'));
+  E.step(s, 1);
+  near(s.craftAcc, 10 * 0.02 * 1.1, 'eine Zelle: Servitoren 10 % schneller');
+  s.standing.mechanicus = 15; s._eff = null;
+  assert.ok(E.setOffice(s, 'techmarine', 1));
+  near(E.craftYield(s), 1 + 0.06 + 2 * 0.03 + 0.1, 'Schmiede, Hilfe Stufe 2, Techmarine');
+});
+
+test('Welt-Ereignisse: Freihändler, Warpsturm, WAAAGH! und Genestealer-Kult', () => {
+  const s = linked('um');
+  s.worldIn.trader = 1;
+  withRng([0.5], () => E.step(s, 1));
+  assert.ok(s.seen.valkar);
+  assert.match(s.log.at(-1).text, /Haus Valkar bietet Handel an/);
+  near(s.worldIn.trader, 3000, 'nächster Freihändler');
+  s.worldIn.trader = 1;
+  E.step(s, 1);
+  assert.strictEqual(s.docked, true);
+  s.worldIn.trader = 1e9;
+  s.worldIn.waaagh = 1; s.threat = 10;
+  E.step(s, 1);
+  near(s.threat, 10 + 0.01 + 100, 'WAAAGH! +100');
+  s.worldIn.waaagh = 1e9;
+  s.worldIn.storm = 1;
+  E.step(s, 1);
+  assert.match(s.log.at(-1).text, /Warpsturm/);
+  s.worldIn.storm = 1e9;
+  E.step(s, 1000);
+  assert.strictEqual(s.storm, 0);
+  assert.match(s.log.at(-1).text, /legt sich/);
+  s.places.hive = true; s.worldIn.cult = 1;
+  E.step(s, 1);
+  s.worldIn.cult = 1e9;
+  assert.ok(s.seen.cult);
+  near(E.effects(s)['arrival.bonus'], 0.1 + 0.1 - 0.5, 'Kult: Zuzug −50 %');
+  const purge = byId(D.missions, 'cultpurge');
+  assert.ok(E.isUnlocked(s, purge));
+  delete s.places.ashwaste; s.marines.brothers = 10;       // ohne Aschewüste keine Überfälle während des Einsatzes
+  assert.ok(E.sendMission(s, 'cultpurge', 10));
+  withRng([0.01, ...Array(10).fill(0.99)], () => E.step(s, s.missions[0].left));
+  assert.deepStrictEqual([!!s.seen.cult, !!s.seen.cultCrushed], [false, true]);
+  assert.ok(E.isUnlocked(s, byId(D.partners, 'inquisition')));
+  near(E.effects(s)['arrival.bonus'], 0.2, 'Kult zerschlagen');
+});
+
+test('Speichern und Laden mit Ansehen, Aufträgen, Visionen, Ereignis-Uhren und Warpsturm', () => {
+  const s = linked();
+  Object.assign(s, { standing: { varos: 16.5, mechanicus: 3 }, standingOrders: { varos: true }, orderTimer: 4,
+    visionIn: 123, vision: 7, storm: 300, docked: true, eventIn: 777 });
+  for (const w of D.worldEvents) s.worldIn[w.id] = 55;
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
+  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', standing: { varos: -3, nope: 5, mechanicus: 1e12 },
+    standingOrders: { varos: true, nope: true, guard: 'ja' }, orderTimer: 99, visionIn: -1, vision: 99,
+    worldIn: { trader: 1e12, nope: 5 }, storm: 1e9, docked: 'ja' }));
+  assert.deepStrictEqual([bad.standing, bad.standingOrders, bad.orderTimer, bad.visionIn, bad.vision, bad.worldIn.trader,
+    bad.storm, bad.docked], [{ mechanicus: 1e6 }, { varos: true }, 10, 400, 15, 4500, 1000, false]);
+});
+
+// ---------- Etappe 7: Flotte und Sektor ----------
+
+function fleeted(ch = 'da') {
+  const s = linked(ch);
+  Object.assign(s.tech, { flight: true, warpnav: true, orbital: true, stasis: true });
+  s.places.spaceport = true;
+  Object.assign(s.res, { ceramite: 1000, plasteel: 1000, archeotech: 100, fuelcell: 100, navdata: 50 });
+  s.seen.archeotech = true; s._eff = null;
+  return s;
+}
+
+test('Schiffe: Platz je Landeplattform und Werft, Preis mit Faktor, Schlachtbarke einmal, Flottenstärke', () => {
+  const s = fleeted();
+  assert.strictEqual(E.buildShip(s, 'thunderhawk'), false);   // keine Landeplattform
+  assert.ok(E.build(s, 'landingPad'));
+  for (let i = 0; i < 3; i++) assert.ok(E.buildShip(s, 'thunderhawk'));
+  assert.strictEqual(E.buildShip(s, 'thunderhawk'), false);   // Plattform voll (3 Plätze)
+  near(E.shipPrice(s, 'thunderhawk').ceramite, 15 * 1.25 ** 3, 'Preis steigt');
+  near(E.fleetPower(s), 30, 'drei Thunderhawks');
+  near(E.missionTime(s, 1000, true), 1000 * (1 - 0.3), 'Aufklärung −10 % je Thunderhawk');
+  assert.strictEqual(E.buildShip(s, 'cruiser'), false);       // keine Werft
+  assert.ok(E.build(s, 'orbitalYard'));
+  assert.ok(E.buildShip(s, 'cruiser') && E.buildShip(s, 'cruiser'));
+  assert.strictEqual(E.buildShip(s, 'cruiser'), false);       // Werft voll (2 Plätze)
+  s.res.ceramite = 1000; s.res.plasteel = 1000;
+  assert.ok(E.buildShip(s, 'barge'));
+  assert.strictEqual(E.buildShip(s, 'barge'), false);         // nur eine
+  near(E.fleetPower(s), 30 + 100 + 300, 'Flottenstärke');
+  assert.strictEqual(E.buildShip(s, 'nope'), false);
+  s.res.servoskull = 30; s.upgrades.auspex = true; s._eff = null;
+  near(E.missionTime(s, 1000, true), 1000 * (1 - 0.8), 'Aufklärung höchstens −80 %');
+});
+
+test('Feldzug: nur zu Nachbarn, kostet Navigationsdaten und Treibstoff, Flotte und Trupp kämpfen', () => {
+  const s = fleeted('um');
+  s.marines.brothers = 20;
+  assert.strictEqual(E.startCampaign(s, 'metallum', 10), false);   // kein Nachbar von Kharos
+  assert.strictEqual(E.startCampaign(s, 'varos', 4), false);       // Trupp zu klein
+  near(E.campaignChance(s, 'varos', 10), 0.5 + 0.4 * Math.log2(100 / 150), 'ohne Flotte');
+  assert.ok(E.build(s, 'landingPad'));
+  for (let i = 0; i < 3; i++) assert.ok(E.buildShip(s, 'thunderhawk'));
+  const nav = s.res.navdata, fuel = s.res.fuelcell;
+  assert.ok(E.startCampaign(s, 'varos', 10));                      // Stärke 30 + 100 gegen 150
+  assert.deepStrictEqual([nav - s.res.navdata, fuel - s.res.fuelcell], [2, 4]);
+  assert.strictEqual(E.freeBrothers(s), 10);
+  assert.strictEqual(E.startCampaign(s, 'tyrrhen', 5), false);     // einer zur Zeit
+  withRng([0.1, ...Array(10).fill(0.99)], () => E.step(s, 3600));  // Sieg, niemand fällt
+  assert.deepStrictEqual([!!s.systems.varos, s.campaign, s.marines.brothers], [true, null, 20]);
+  near(E.effects(s)['supplies.bonus'] || 0, 0.15, 'Varos: Vorräte +15 %');
+  assert.ok(s.meta.honors.some(h => h.text === 'System befreit: Varos Agraria.'));
+  assert.ok(E.reachable(s, 'metallum'));                           // jetzt Nachbar
+  assert.ok(E.startCampaign(s, 'oriel', 10));                      // Stärke 130 gegen 350: Chance 5 %
+  withRng([0.9, 0.1, 0.9, ...Array(9).fill(0.9)], () => E.step(s, 7200));
+  assert.deepStrictEqual([!!s.systems.oriel, s.marines.brothers], [false, 19]);
+  const lines = s.log.slice(-2).map(l => l.text);
+  assert.match(lines[0], /^Feldzug gescheitert: Sankt Oriel/);
+  assert.match(lines[1], /^Gefallen: Bruder/);
+});
+
+test('Feldzug-Dauer: Kartentisch und Navigatorenhaus kürzen, im Warpsturm ruht der Feldzug', () => {
+  const s = fleeted();
+  s.marines.brothers = 10;
+  near(E.campaignTime(s, 'varos'), 3600, 'Grunddauer');
+  assert.ok(E.upgradeVisible(s, 'holotable'));
+  s.res.datatablet = 5;
+  assert.ok(E.buyUpgrade(s, 'holotable'));
+  s.standing.navis = 5; s._eff = null;                             // Navigatorenhaus Stufe 1
+  near(E.campaignTime(s, 'varos'), 3600 * (1 - 0.2 - 0.03), 'Kartentisch −20 %, Navigatorenhaus −3 %');
+  assert.ok(E.startCampaign(s, 'varos', 5));
+  const left = s.campaign.left;
+  s.storm = 500; s._eff = null;
+  E.step(s, 100);
+  near(s.campaign.left, left, 'Warpsturm: Feldzug ruht');
+  s.storm = 0; s._eff = null;
+  E.step(s, 100);
+  near(s.campaign.left, left - 100, 'läuft weiter');
+  const t = fleeted();
+  t.tech.warpnav = false;
+  assert.strictEqual(E.upgradeVisible(t, 'holotable'), false);     // Kartentisch erst ab Warpnavigation
+});
+
+test('Systemboni: Knechte-Plätze +10 %, Navigationsdaten je Vision, Ruhm aus Beute', () => {
+  const s = fleeted('um');
+  s.bld.quarters = 5; s._eff = null;
+  assert.strictEqual(E.serfCap(s), 10);
+  s.systems.tyrrhen = true; s._eff = null;
+  assert.strictEqual(E.serfCap(s), 11);
+  s.systems.beacon = true; s._eff = null;
+  s.vision = 5;
+  const nav = s.res.navdata;
+  assert.ok(E.catchVision(s));
+  near(s.res.navdata, nav + 2, 'Leuchtfeuer: +1 je Vision');
+  s.ships.barge = 1; s._eff = null;
+  s.threat = 50; s.marines.brothers = 10;
+  assert.ok(E.sendMission(s, 'raiders', 5));
+  withRng([0.1, 0.9, 0.9, 0.9, 0.9, 0.9], () => E.step(s, 240));
+  near(s.res.renown, 5 * 1.1, 'Schlachtbarke: Ruhm +10 %');
+});
+
+test('Speichern und Laden mit Schiffen, Systemen und laufendem Feldzug', () => {
+  const s = fleeted();
+  s.marines.brothers = 12;
+  s.ships.thunderhawk = 2; s.systems.varos = true; s.bld.landingPad = 1; s._eff = null;
+  s.eventIn = 777; s.visionIn = 100; for (const w of D.worldEvents) s.worldIn[w.id] = 55; // gültige Uhren
+  assert.ok(E.startCampaign(s, 'metallum', 8));
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
+  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', marines: { brothers: 6 }, ships: { thunderhawk: 2.7, nope: 3, barge: 4 },
+    systems: { varos: true, nope: true, kharos: true, rift: 'ja' }, campaign: { id: 'rift', brothers: 9, wulfen: 0, left: 1e9 } }));
+  assert.deepStrictEqual([bad.ships, bad.systems, bad.campaign], [{ thunderhawk: 2, cruiser: 0, barge: 1 }, { varos: true }, null]);
+  const ok = E.load(JSON.stringify({ v: 1, chapter: 'da', marines: { brothers: 6 }, campaign: { id: 'rift', brothers: 5, wulfen: 0, left: 1e9 } }));
+  assert.deepStrictEqual(ok.campaign, { id: 'rift', brothers: 5, wulfen: 0, left: 21600 });
+});
+
+// ---------- Etappe 8: Nachfolgeorden ----------
+
+// Bereit zur Gründung: Gründungsrecht, 120 Brüder, 25 Gensaat, 1.200 Ruhm, zwei Systeme mit Vermächtnis (5 + 10).
+function ripe(ch = 'da') {
+  const s = fleeted(ch);
+  s.tech.founding = true;
+  s.marines.brothers = 120; s.bld.geneVault = 3;
+  s.res.geneseed = 25; s.res.renown = 1200;
+  s.systems.kathar = true; s.systems.rift = true; s._eff = null;
+  return s;
+}
+
+test('Vermächtnis: Brüder ÷ 10, Ruhm ÷ 500, Systeme; Gründung braucht Lehre, 100 Brüder, 20 Gensaat', () => {
+  const s = ripe();
+  assert.deepStrictEqual(E.legacyGain(s), { brothers: 12, renown: 2, systems: 15, total: 29 });
+  assert.strictEqual(E.foundBlock(s), null);
+  s.res.geneseed = 19;
+  assert.strictEqual(E.foundBlock(s), 'geneseed');
+  s.marines.brothers = 99;
+  assert.strictEqual(E.foundBlock(s), 'brothers');
+  s.tech.founding = false;
+  assert.strictEqual(E.foundBlock(s), 'lore');
+  assert.strictEqual(E.found(s, { name: 'X', lineage: 'um' }), null);
+});
+
+test('Gründung: neuer Orden nach Linie mit Name und Farben, Vermächtnis wächst, Liber Honoris bleibt', () => {
+  const s = ripe();
+  const honors = s.meta.honors.length;
+  const n = E.found(s, { name: 'Wächter der Asche', palette: 'teal', lineage: 'sal' });
+  assert.ok(n);
+  assert.deepStrictEqual([n.chapter, n.name, n.palette], ['sal', 'Wächter der Asche', 'teal']);
+  assert.deepStrictEqual([n.meta.legacy, n.meta.legacyFree, n.meta.lines, n.meta.foundings], [29, 29, { sal: 1 }, 1]);
+  assert.strictEqual(n.meta.honors.length, honors + 1);
+  assert.match(n.meta.honors.at(-1).text, /Nachfolgeorden gegründet: Wächter der Asche \(Linie Salamanders\)/);
+  assert.deepStrictEqual([n.serfs, n.marines.brothers, n.marines.coma, Object.keys(n.tech).length, n.res.renown], [0, 0, 5, 0, 0]);
+  assert.match(n.log[0].text, /Wächter der Asche/);
+  assert.strictEqual(E.found(ripe(), { name: '  ', lineage: 'sal' }), null);            // Name fehlt
+  assert.strictEqual(E.found(ripe(), { name: 'X'.repeat(25), lineage: 'sal' }), null);   // zu lang
+  assert.strictEqual(E.found(ripe(), { name: 'X', lineage: 'nope' }), null);
+  assert.strictEqual(E.found(ripe(), { name: 'X', lineage: 'sal', palette: 'nope' }), null);
+  const w = E.found(ripe('sw'), { name: 'Eiszähne', lineage: 'sw' });
+  assert.deepStrictEqual([w.palette, w.meta.lines], [null, { sw: 1 }]);                  // Farben der Linie
+  assert.strictEqual(E.found(n, { name: 'X', lineage: 'um' }), null);                    // der Neue kann noch nicht
+});
+
+test('Linienstufe verstärkt den Linien-Bonus; Vermächtnis gibt +1 % Produktion und Lager je Punkt', () => {
+  const s = E.create('um', { legacy: 20, lines: { um: 2 } });
+  near(E.effects(s)['cap.bonus'], 0.2 * 1.5, 'Lager +20 % × (1 + 2 × 25 %)');
+  near(E.effects(s)['arrival.bonus'], 0.1 * 1.5, 'Zuzug');
+  near(E.effects(s)['company.bonus'], 0.05, 'Eigenheit bleibt');
+  near(E.cap(s, 'scrap'), 150 * (1 + 0.3 + 0.2), 'Lager: Linie und Vermächtnis');
+  s.serfs = 1; s.jobs.scrapper = 1;
+  near(E.rates(s).scrap, 0.3 * 1.2, 'Produktion +20 %');
+  const b = E.create('ba', { lines: { ba: 1 } });
+  near(E.power(b, 1, 0), 10 * (1 + 0.2 * 1.25), 'Blood Angels Stufe 1');
+});
+
+test('Relikte: kaufen mit freien Punkten, Wirkung sofort, Startpaket bei der Gründung, Ewige Wacht', () => {
+  const s = ripe('um');
+  s.meta.legacy = 60; s.meta.legacyFree = 45;
+  assert.ok(E.buyRelic(s, 'skulls'));                          // 30
+  assert.strictEqual(E.buyRelic(s, 'skulls'), false);          // nur einmal
+  assert.strictEqual(E.buyRelic(s, 'vault'), false);           // 100 > 15 frei
+  assert.ok(E.buyRelic(s, 'banner') && E.buyRelic(s, 'codex')); // 5 + 10
+  assert.strictEqual(s.meta.legacyFree, 0);
+  near(E.effects(s)['knowledge.bonus'] || 0, 0.15, 'Servoschädel: Wissen +15 %');
+  assert.match(s.log.at(-1).text, /Kodex-Abschrift/);
+  const n = E.found(s, { name: 'Ultima Vigil', lineage: 'um' });
+  assert.deepStrictEqual([n.res.scrap, n.bld.hydroFarm, n.bld.quarters, !!n.tech.salvage, n.meta.legacy], [50, 1, 1, true, 89]);
+  const v = E.create('da', { relics: { vigil: true, veterans: true } });
+  assert.deepStrictEqual([E.offlineMax(v), v.marines.coma, E.marineCap(v)], [7 * 86400, 10, 10]);
+  assert.strictEqual(E.offlineMax(E.create('da')), 3 * 86400);
+});
+
+test('Speichern und Laden mit Vermächtnis, Relikten, Linien, Name und Farben', () => {
+  const s = E.create('sal', { legacy: 40, legacyFree: 12, relics: { skulls: true }, lines: { sal: 2, um: 1 }, foundings: 3 },
+    { name: 'Aschewächter', palette: 'teal' });
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
+  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', name: 'X'.repeat(40), palette: 'nope',
+    meta: { legacy: -5, legacyFree: 1e12, relics: { skulls: true, nope: true }, lines: { da: 2.5, nope: 3, um: -1 }, foundings: 'viele' } }));
+  assert.deepStrictEqual([bad.name, bad.palette, bad.meta.legacy, bad.meta.legacyFree, bad.meta.relics, bad.meta.lines, bad.meta.foundings],
+    ['Dark Angels', null, 0, 0, { skulls: true }, { da: 2 }, 0]);
+});
+
+// ---------- Etappe 9: Feinschliff ----------
+
+test('Flair: alle 600 s eine Zeile ab dem ersten Knecht, Namen erst mit wachen Brüdern', () => {
+  const s = fresh();
+  s.flairIn = 1;
+  E.step(s, 1);
+  assert.strictEqual(s.log.length, 2);                        // noch kein Knecht: nichts
+  s.seen.serfs = true;
+  E.step(s, 1);
+  assert.ok(D.flair.includes(s.log.at(-1).text), 'eine Zeile ohne Namen');
+  near(s.flairIn, 600, 'nächste in 600 s');
+  const b = awake();
+  b.seen.serfs = true; b.flairIn = 1;
+  const before = b.logSeq;
+  E.step(b, 1);
+  assert.strictEqual(b.logSeq, before + 1);
+  b.flairIn = 1;
+  E.simulate(b, 3600);                                        // offline keine Flair-Zeilen
+  assert.ok(b.log.every(l => l.id <= before + 1 || !D.flair.includes(l.text)));
+});
+
+// ---------- Tempo-Bot ----------
+
+const total = cost => Object.values(cost).reduce((a, b) => a + b, 0);
+
+// Aktives Profil: klickt die ersten 10 Minuten 2× je Sekunde (danach wie ein Mensch nicht mehr), entscheidet alle 10 s.
+const MILESTONES = {
+  serf: s => s.serfs > 0,
+  research: s => Object.keys(s.tech).length > 0,
+  wake: s => s.marines.brothers > 0,
+  neophyte: s => !!s.seen.neophyte,
+  mission: s => !!s.seen.mission,
+  forge: s => s.bld.forge > 0,
+  reclusiam: s => s.bld.reclusiam > 0,
+  trade: s => Object.keys(s.standing).length > 0,
+  company: s => s.companies > 0,
+  system: s => Object.keys(s.systems).length > 0,
+  founding: s => E.foundBlock(s) === null,
+};
+const track = (s, when) => { for (const k in MILESTONES) if (MILESTONES[k](s)) when[k] ??= s.time; };
+// Fester Zufall (mulberry32): gleicher Samen, gleicher Lauf. Sonst streuen die Zeiten um Tage.
+function seeded(seed) {
+  return () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function withSeed(seed, fn) {
+  const old = E.rng;
+  E.rng = seeded(seed);
+  try { return fn(); } finally { E.rng = old; }
+}
+
+function bot(maxSeconds = 3 * 3600, until = ['serf', 'research', 'wake', 'neophyte'], seed = 1) {
+  return withSeed(seed, () => botRun(maxSeconds, until));
+}
+function botRun(maxSeconds, until) {
+  const s = E.create('da'), when = {};
+  while (s.time < maxSeconds && !until.every(k => k in when)) {
+    if (s.time < 600) for (let i = 0; i < 2; i++) E.click(s, s.res.supplies < s.res.scrap ? 'supplies' : 'scrap');
+    if (s.time % 10 === 0) think(s);
+    E.step(s, 1);
+    track(s, when);
+  }
+  return when;
+}
+
+// Lockeres Profil: 4× am Tag (8, 12, 18, 22 Uhr) je 5 Minuten, am ersten Tag wird dabei geklickt.
+// Dazwischen läuft simulate() wie bei echter Abwesenheit (offline höchstens 3 Überfälle).
+function casualBot(maxDays = 14, until = Object.keys(MILESTONES), seed = 1) {
+  return withSeed(seed, () => casualRun(maxDays, until));
+}
+function casualRun(maxDays, until) {
+  const s = E.create('da'), when = {};
+  const WINDOWS = [8, 12, 18, 22].map(h => h * 3600);
+  while (s.time < maxDays * 86400 && !until.every(k => k in when)) {
+    const day = Math.floor(s.time / 86400) * 86400, t = s.time - day;
+    const next = WINDOWS.find(w => w + 300 > t);
+    const start = next === undefined ? day + 86400 + WINDOWS[0] : day + next;
+    if (start > s.time) { E.simulate(s, start - s.time); track(s, when); continue; }
+    for (let i = 0; i < 300 && s.time < start + 300; i++) {
+      if (s.time < 86400) for (let c = 0; c < 2; c++) E.click(s, s.res.supplies < s.res.scrap ? 'supplies' : 'scrap');
+      if (i % 10 === 0) think(s);
+      E.step(s, 1);
+      track(s, when);
+    }
+  }
+  return when;
+}
+
+// Erst die Gebäude, die etwas Neues freischalten; bis sie stehen, spart der Bot dafür.
+const KEY_BUILDINGS = ['scriptorium', 'apothecarion', 'mine', 'cells', 'arena', 'forge', 'refinery', 'shrine', 'reclusiam',
+  'landingPad', 'orbitalYard'];
+const unlocked = (s, list, id) => E.isUnlocked(s, byId(list, id));
+
+function think(s) {
+  const open = D.techs.filter(t => E.isUnlocked(s, t) && !s.tech[t.id]).sort((a, b) => total(a.cost) - total(b.cost));
+  for (const t of open) E.research(s, t.id);
+  for (const p of D.places) if (E.placeState(s, p.id) === 'open') E.scout(s, p.id);
+  if (unlocked(s, D.offices, 'apothecary') && s.offices.apothecary < 1) E.setOffice(s, 'apothecary', 1);
+  if (unlocked(s, D.offices, 'priest') && s.offices.priest < 1) E.setOffice(s, 'priest', 1);
+  if (unlocked(s, D.offices, 'techmarine') && s.offices.techmarine < 1) E.setOffice(s, 'techmarine', 1);
+  // Flotte: Visionen fangen, Schiffe bauen, Feldzüge mit guter Chance
+  if (s.vision > 0) E.catchVision(s);
+  for (const x of D.ships) while (E.buildShip(s, x.id));
+  if (!s.campaign && s.tech.warpnav) {
+    const size = Math.min(D.rules.campaignSquad[1], E.freeBrothers(s) + E.freeWulfen(s));
+    const target = D.systems.filter(x => E.reachable(s, x.id)).sort((a, b) => a.threat - b.threat)
+      .find(x => size >= D.rules.campaignSquad[0] && E.campaignChance(s, x.id, size) >= 0.7);
+    if (target) E.startCampaign(s, target.id, size);
+  }
+  // Beziehungen: Überschuss tauschen (volle Lager, von Waren ohne Lager 5 Pakete), ab Stufe 2 als Dauerauftrag
+  const spare = p => Object.entries(p.give).every(([r, v]) => s.res[r] >= (E.cap(s, r) === Infinity ? 5 * v : Math.max(v, 0.8 * E.cap(s, r))));
+  for (const p of D.partners) {
+    if (!E.isUnlocked(s, p)) continue;
+    if (E.standingLevel(s, p.id) >= 2) E.setStandingOrder(s, p.id, true);
+    else if (spare(p)) E.trade(s, p.id);
+  }
+  // Reclusiam: Fleiß singen lassen, Riten kaufen, sobald der Glaube reicht
+  if (s.bld.reclusiam) {
+    if (!s.litany) E.chooseLitany(s, 'toil');
+    for (const r of D.rites) E.buyRite(s, r.id);
+  }
+  // Schmiede: Servitoren machen Plastahl, volle Lager werden zu Waren, Verbesserungen sofort kaufen
+  if (s.bld.forge) {
+    if (!s.servitorRecipe) E.setServitorRecipe(s, 'plasteel');
+    const full = id => s.res[id] >= 0.8 * E.cap(s, id);
+    // nur ein Teil des vollen Lagers wird zu Waren, der Rest bleibt fürs Bauen
+    const part = (id, per) => Math.max(1, Math.floor(0.3 * s.res[id] / per));
+    if (full('scrap')) E.craft(s, 'plasteel', part('scrap', 50));
+    // Treibstoff zuerst (Schiffe und Feldzüge), dann Ceramit
+    if (s.tech.flight && s.res.fuelcell < 40 && s.res.promethium >= 0.5 * E.cap(s, 'promethium')) E.craft(s, 'fuelcell', part('promethium', 60));
+    if (full('ore') && full('promethium')) E.craft(s, 'ceramite', part('ore', 40));
+    const tablets = open.some(t => (t.cost.datatablet || 0) > s.res.datatablet);
+    if (full('knowledge') && (tablets || (open.length && open[0].cost.knowledge > E.cap(s, 'knowledge')))) E.craft(s, 'datatablet', 'max');
+    for (const u of D.upgrades) E.buyUpgrade(s, u.id);
+  }
+  // Einsätze mit guter Chance; mit Einsatzplanung als Befehl (Wiederholen)
+  for (const m of D.missions) {
+    if (!E.isUnlocked(s, m)) continue;
+    const size = Math.min(m.squad[1], E.freeBrothers(s) + E.freeWulfen(s));
+    if (size < m.squad[0] || E.chance(s, m.id, size) < 0.7) continue;
+    if (E.canOrder(s)) E.setOrder(s, m.id, size);
+    else E.sendMission(s, m.id, size);
+  }
+  const lean = () => (s.seen.marines ? E.leanFood(s) : E.rates(s).supplies); // mit Brüdern für den Frost planen
+  // Neue Aufgaben bekommen Leute von den Schrottsammlern: 1 Raffineriearbeiter je 2 Bergleute, 1 Prediger je 6 Knechte
+  for (const [job, want] of [['refiner', Math.floor(s.jobs.miner / 2)], ['preacher', Math.floor(s.serfs / 6)]]) {
+    while (unlocked(s, D.jobs, job) && s.jobs[job] < want && s.jobs.scrapper > 1) { E.assign(s, 'scrapper', -1); E.assign(s, job, 1); }
+  }
+  while (E.free(s) > 0) {
+    const job = lean() < 1 && unlocked(s, D.jobs, 'farmer') ? 'farmer'
+      : unlocked(s, D.jobs, 'preacher') && s.jobs.preacher * 6 < s.serfs ? 'preacher'
+      : unlocked(s, D.jobs, 'refiner') && s.jobs.refiner * 2 < s.jobs.miner ? 'refiner'
+      : unlocked(s, D.jobs, 'miner') && s.jobs.miner * 2 < s.jobs.scrapper ? 'miner'
+      : unlocked(s, D.jobs, 'scribe') && s.jobs.scribe <= s.jobs.scrapper ? 'scribe' : 'scrapper';
+    if (!E.assign(s, job, 1)) break;
+  }
+  const food = lean() < 1 ? ['hydroFarm'] : [];
+  // Lager zu klein für die nächste Lehre: Archivum oder Skriptorium, je nachdem was billiger ist.
+  const needKnow = open.length && open[0].cost.knowledge > E.cap(s, 'knowledge')
+    ? ['archivum', 'scriptorium'].filter(id => unlocked(s, D.buildings, id))
+      .sort((a, b) => total(E.price(s, 'building', a)) - total(E.price(s, 'building', b))) : [];
+  const key = KEY_BUILDINGS.find(id => unlocked(s, D.buildings, id) && !s.bld[id]);
+  const rest = key ? [key] : needKnow.length ? needKnow : D.buildings.filter(b => E.isUnlocked(s, b)).map(b => b.id)
+    .sort((a, b) => total(E.price(s, 'building', a)) - total(E.price(s, 'building', b)));
+  const cheapest = ids => ids.filter(id => unlocked(s, D.buildings, id))
+    .sort((a, b) => total(E.price(s, 'building', a)) - total(E.price(s, 'building', b)));
+  const house = s.serfs >= E.serfCap(s) ? cheapest(['quarters', 'hab']).slice(0, 1) : [];
+  for (const id of [...food, ...house, ...rest]) if (E.build(s, id)) break;
+}
+
+const TEMPO = [
+  ['Erster Knecht', 'serf', 120, '≈ 1 Min.'],
+  ['Erste Lehre', 'research', 300, '≤ 5 Min.'],
+  ['Brüder erwachen', 'wake', 1800, '≈ 20 Min. (Mensch ≈ 40)'],
+  ['Erster eigener Neophyt', 'neophyte', 5400, '≈ 1 Std. (Mensch ≈ 2)'],
+];
+const TEMPO_CASUAL = [
+  ['Brüder erwachen', 'wake', '≤ ½ Tag'],
+  ['Erster eigener Neophyt', 'neophyte', '≈ 1½ Tage'],
+  ['Erster Kampfeinsatz', 'mission', '≈ 1½–2 Tage'],
+  ['Erste Schmiede', 'forge', '≈ 2½ Tage'],
+  ['Reclusiam', 'reclusiam', '≈ 3½ Tage'],
+  ['Erster Tausch', 'trade', '≈ 5 Tage'],
+  ['1. Kompanie', 'company', '≈ 10–11 Tage'],
+  ['Erstes befreites System', 'system', '≈ 6½ Tage'],
+  ['Nachfolgeorden möglich', 'founding', '≈ 1–2 Wochen'],
+];
+
+test('Tempo: Meilensteine im Ziel (aktiv)', () => {
+  const when = bot();
+  for (const [name, key, max] of TEMPO) assert.ok(when[key] <= max, `${name} nach ${when[key]} s (höchstens ${max} s)`);
+});
+
+function tempo() {
+  const when = bot(3 * 3600, Object.keys(MILESTONES)), runs = [1, 2, 3].map(seed => casualBot(14, Object.keys(MILESTONES), seed));
+  const clock = sec => (sec === undefined ? '–' : sec < 3600 ? `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')} Min.` : sec >= 86400 ? `${(sec / 86400).toFixed(1)} Tage`
+    : `${Math.floor(sec / 3600)}:${String(Math.floor(sec % 3600 / 60)).padStart(2, '0')} Std.`);
+  console.log('Aktiv                     Zeit       Ziel');
+  for (const [name, key, , goal] of TEMPO) console.log(`${name.padEnd(26)}${clock(when[key]).padEnd(11)}${goal}`);
+  console.log('\nLocker (4× am Tag 5 Min., ab dem ersten Blick um 8 Uhr), Median aus 3 Läufen (Spanne)');
+  // Der lockere Spieler fängt um 8 Uhr an: ab da wird gezählt
+  for (const [name, key, goal] of TEMPO_CASUAL) {
+    const t = runs.map(r => (r[key] === undefined ? Infinity : r[key] - 8 * 3600)).sort((a, b) => a - b);
+    const c = x => (x === Infinity ? '–' : clock(x));
+    console.log(`${name.padEnd(26)}${c(t[1]).padEnd(11)}${goal.padEnd(16)}(${c(t[0])} bis ${c(t[2])})`);
+  }
+}
+
+function run() {
+  let failed = 0;
+  for (const [name, fn] of tests) {
+    try { fn(); console.log('ok      ' + name); }
+    catch (err) { failed++; console.log('FEHLER  ' + name + '\n        ' + err.message); }
+  }
+  console.log(failed ? `${failed} von ${tests.length} fehlgeschlagen` : `alle ${tests.length} ok`);
+  process.exitCode = failed ? 1 : 0;
+}
+
+if (process.argv[2] === 'tempo') tempo();
+else run();
