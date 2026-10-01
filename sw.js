@@ -1,6 +1,6 @@
 // Gensaat – Service Worker: das Spiel läuft auch offline; neue Versionen kommen trotzdem sofort.
 // Nur eigene alte Versionen löschen: auf primov1x.github.io liegen mehrere Spiele mit eigenem Speicher.
-const CACHE = 'gensaat-v2';
+const CACHE = 'gensaat-v3';
 const APP = ['./', 'index.html', 'style.css', 'js/data.js', 'js/engine.js', 'js/ui.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png'];
 
@@ -30,7 +30,7 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.origin !== location.origin) return;
-  // Spiel-Dateien: erst Netz (immer die neue Version), offline aus dem Speicher
-  e.respondWith(fetch(req).then(res => (res.ok ? keep(req, res) : res))
+  // Spiel-Dateien: erst Netz (immer die neue Version; no-cache fragt am Browser-Speicher vorbei nach), offline aus dem Speicher
+  e.respondWith(fetch(req, { cache: 'no-cache' }).then(res => (res.ok ? keep(req, res) : res))
     .catch(() => caches.match(req, { ignoreSearch: true })));
 });

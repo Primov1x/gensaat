@@ -1159,6 +1159,7 @@
       $('chapter-info').innerHTML = (S.name !== ch.name ? `<p><b>${S.name.replace(/</g, '&lt;')}</b> · Linie ${ch.name}` +
         ` (Stufe ${S.meta.lines[S.chapter] || 0})</p>` : `<p><b>${ch.name}</b> · Schiff „${ch.ship}“</p>`) + `<p>Bonus: ${ch.bonus}</p>` +
         `<p>Eigenheit: ${ch.quirk}</p><p>Makel: ${ch.flaw}</p>`;
+      $('version').textContent = `Version: ${D.rules.release}`;
       msg('');
       $('menu').showModal();
     });

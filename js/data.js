@@ -5,6 +5,7 @@
 const DATA = {
   rules: {
     saveVersion: 2,
+    release: 'Etappe 10 · Zahlen ×100', // steht im Menü: so sieht man, welche Version läuft
     popScale: 100,          // Etappe 10: alles, was Köpfe zählt, ×100; alles, was je Kopf wirkt, ÷100
     arrivalLogEvery: 60,    // Zuzug im Log höchstens einmal je Minute zusammengefasst
     yearLength: 1000,       // Sekunden je imperiales Jahr (Datum 0.FFF.JJJ.M42)
