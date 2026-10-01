@@ -15,12 +15,12 @@
   const N0 = nf(0), N1 = nf(1), N2 = nf(2), NF = [N0, N1, N2];
   const up = x => Math.ceil(x - 1e-9), down = x => Math.floor(x + 1e-9);
 
-  // Deutsche Kurzform. round: Math.round, up (Preise) oder down (Bestand), damit ein Bestand
-  // nie genauso aussieht wie ein Preis, für den doch noch etwas fehlt.
+  // Deutsche Kurzform: ganze Zahlen mit Tausenderpunkt, ab einer Million kurz. round: Math.round, up (Preise)
+  // oder down (Bestand), damit ein Bestand nie genauso aussieht wie ein Preis, für den doch noch etwas fehlt.
   function fmt(n, round = Math.round) {
     const a = Math.abs(n);
     const [div, unit, digits] = a >= 1e9 ? [1e9, ' Mrd.', 2] : a >= 1e6 ? [1e6, ' Mio.', 2]
-      : a >= 1e4 ? [1e3, ' Tsd.', 1] : a >= 100 ? [1, '', 0] : [1, '', 1];
+      : a >= 100 ? [1, '', 0] : [1, '', 1];
     const f = 10 ** digits;
     return NF[digits].format(round(n / div * f) / f) + unit;
   }
@@ -132,7 +132,7 @@
         const k = card(() => E.click(S, c.id));
         k.el.classList.add('click');
         k.name.textContent = c.name;
-        k.sub.textContent = '+1 ' + RES[c.id].one;
+        k.sub.textContent = '+' + amount(c.id, D.rules.clickGain);
         return k;
       },
       update: k => setOff(k, S.res[c.id] >= E.cap(S, c.id)),
@@ -274,14 +274,15 @@
     return items;
   }
 
-  const perUnitText = id => Object.entries(RES[id].perUnit || {}).map(([k, v]) => effectText(k, v) + ' je Stück').join(', ');
+  const perUnitText = id => Object.entries(RES[id].perUnit || {}).map(([k, v]) => effectText(k, v * P)).join(', ');
 
+  // Herstellen in Schritten zu P und 10 P Stück (wie ein Arbeitsgang der Servitoren) oder so viel wie möglich.
   function craftRow(r) {
     const el = document.createElement('div');
     el.className = 'craft';
     el.innerHTML = `<svg aria-hidden="true"><use href="#${RES[r.id].icon}"/></svg>` +
       '<div class="job-text"><span class="name"></span><span class="sub"></span></div>' +
-      ['1', '10', 'max'].map(n => `<button class="step c-btn" type="button" data-n="${n}">${n === 'max' ? 'max' : '+' + n}</button>`).join('');
+      [P, 10 * P, 'max'].map(n => `<button class="step c-btn" type="button" data-n="${n}">${n === 'max' ? 'max' : '+' + nHeads(n)}</button>`).join('');
     const btns = [...el.querySelectorAll('.c-btn')];
     for (const b of btns) {
       b.addEventListener('click', () => { if (E.craft(S, r.id, b.dataset.n === 'max' ? 'max' : Number(b.dataset.n))) render(); });
@@ -291,7 +292,8 @@
 
   function updateCraft(k, r) {
     text(k.name, `${RES[r.id].name}: ${fmt(S.res[r.id], down)}`);
-    html(k.sub, costHtml(r.cost) + (RES[r.id].perUnit ? ' · ' + perUnitText(r.id) : ''));
+    const pack = Object.fromEntries(Object.entries(r.cost).map(([id, v]) => [id, v * P])); // Preis und Wirkung je P Stück
+    html(k.sub, `je ${nHeads(P)} Stück: ${costHtml(pack)}` + (RES[r.id].perUnit ? ' · ' + perUnitText(r.id) : ''));
     const none = E.craftCount(S, r.id) < 1;
     for (const b of k.btns) b.disabled = none;
   }
@@ -428,7 +430,7 @@
     const c = E.chance(S, m.id, n);
     const loot = Object.entries(m.loot).map(([id, v]) => amount(id, v)).join(', ');
     text(k.stats, run ? `Unterwegs · zurück in ${fmtTime(run.left)}`
-      : `Bedrohung ${m.threat} · ${fmtTime(E.missionTime(S, m.time))} · ${loot}`);
+      : `Bedrohung ${fmt(m.threat)} · ${fmtTime(E.missionTime(S, m.time))} · ${loot}`);
     text(k.sizeEl, `${nHeads(n)} Kämpfer`);
     text(k.chanceEl, `Chance ${Math.round(c * 100)} %`);
     k.chanceEl.classList.toggle('miss', c < 0.5);
@@ -441,7 +443,7 @@
   }
 
   const MASS = { name: 'Große Messe', desc: 'Der ganze Orden betet. Aller Glaube wird geopfert; die Frömmigkeit bleibt für immer.' };
-  const pietyBonus = piety => Math.sqrt(piety) / 1000; // wie in der Engine: √Frömmigkeit ÷ 10 %
+  const pietyBonus = E.pietyBonus;
 
   // Feste Zeilen, damit darunter nichts springt.
   function reclusiamSummary() {
@@ -451,7 +453,7 @@
     }
     const cost = E.litanyCost(S), short = S.res.faith < cost - 1e-9;
     const lit = S.litany ? `Litanei erneuert sich in ${fmtTime(S.litanyLeft)} für ` +
-      `<span${short ? ' class="miss"' : ''}>${cost} Glauben</span>` : `Keine Litanei. Eine neue kostet ${cost} Glauben.`;
+      `<span${short ? ' class="miss"' : ''}>${fmt(cost, up)} Glauben</span>` : `Keine Litanei. Eine neue kostet ${fmt(cost, up)} Glauben.`;
     const boons = S.boons.map(b => `${effectText(b.key, b.value)} (noch ${fmtTime(b.left)})`).join(', ');
     return `<p>Frömmigkeit <b>${fmt(S.piety, down)}</b> · Produktion <b>${pct(pietyBonus(S.piety))}</b></p>` +
       `<p class="muted">${lit}</p><p class="muted">${boons ? 'Segen: ' + boons : ''}</p>`;
@@ -649,8 +651,8 @@
 
   const FOUND_HINTS = {
     lore: 'Braucht die Lehre Gründungsrecht.',
-    brothers: () => `Braucht ${D.rules.foundBrothers} Kampfbrüder, jetzt ${S.marines.brothers}.`,
-    geneseed: () => `Braucht ${D.rules.foundGeneseed} Gensaat als Zehnt, jetzt ${fmt(S.res.geneseed, down)}.`,
+    brothers: () => `Braucht ${nHeads(D.rules.foundBrothers)} Kampfbrüder, jetzt ${nHeads(S.marines.brothers)}.`,
+    geneseed: () => `Braucht ${nHeads(D.rules.foundGeneseed)} Gensaat als Zehnt, jetzt ${fmt(S.res.geneseed, down)}.`,
   };
   const foundLabel = () => (S.chapter === 'sw' ? 'Neue Große Kompanie' : 'Nachfolgeorden gründen');
   const lineText = (id, lvl) => `${CH[id].name} Stufe ${lvl}: ` +
@@ -922,8 +924,8 @@
       const lucky = Object.entries(item.lucky || {}).map(([id, [p, n]]) => `${Math.round(p * 100)} %: ${amount(id, n)}`);
       return `<p class="muted">Beute bei Sieg: ${Object.entries(item.loot).map(([id, v]) => amount(id, v)).join(', ')}` +
         `${lucky.length ? ' · selten ' + lucky.join(', ') : ''}</p>` +
-        `<p class="muted">Truppgröße ${item.squad[0]}–${item.squad[1]} · Bedrohung ${item.threat}` +
-        `${item.calm ? ` · senkt die Bedrohung um ${item.calm}` : ''}</p>` +
+        `<p class="muted">Truppgröße ${nHeads(item.squad[0])}–${nHeads(item.squad[1])} · Bedrohung ${fmt(item.threat)}` +
+        `${item.calm ? ` · senkt die Bedrohung um ${fmt(item.calm)}` : ''}</p>` +
         '<p class="muted">Verluste sind möglich; Apothecarii bergen die Gensaat der Gefallenen.</p>';
     }
     if (kind === 'place') {

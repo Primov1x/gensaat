@@ -1,12 +1,15 @@
 // Gensaat – alle Inhalte als Tabellen.
 // Zahlen sind Startwerte aus der Spec; der Tempo-Bot (node test.js tempo) prüft das Tempo.
-// Köpfe (Knechte, Brüder, Aspiranten, Gensaat, Servitoren) stehen hier je popScale Köpfe: „Knechtsquartier +2“
-// heißt +2 × popScale Plätze, „0,3 Vorräte/s je Knecht“ heißt je popScale Knechte. scalePop() am Dateiende rechnet um.
+// Alle Mengen (Köpfe, Waren, Kampfkraft, Bedrohung) stehen hier in alten Einheiten; scalePop() am Dateiende
+// rechnet sie ×popScale um: „Knechtsquartier +2“ heißt +200 Plätze, „Hydrokulturfarm 10 Vorräte“ kostet 1.000.
+// Ertrag und Verbrauch je Kopf bleiben gleich (0,3 Vorräte/s je Knecht), Prozente je Kopf werden ÷popScale.
 const DATA = {
   rules: {
-    saveVersion: 2,
-    release: 'Etappe 10 · Zahlen ×100', // steht im Menü: so sieht man, welche Version läuft
-    popScale: 100,          // Etappe 10: alles, was Köpfe zählt, ×100; alles, was je Kopf wirkt, ÷100
+    saveVersion: 3,
+    release: 'Etappe 10 · alles ×100', // steht im Menü: so sieht man, welche Version läuft
+    popScale: 100,          // Etappe 10: alle Mengen ×100, Tempo gleich
+    clickGain: 1,           // Waren je Klick (Trümmer durchsuchen, Vorräte bergen)
+    visionNav: 1,           // Navigationsdaten je Vision
     arrivalLogEvery: 60,    // Zuzug im Log höchstens einmal je Minute zusammengefasst
     yearLength: 1000,       // Sekunden je imperiales Jahr (Datum 0.FFF.JJJ.M42)
     seasonLength: 250,      // Sekunden je Planetenzeit
@@ -57,7 +60,7 @@ const DATA = {
     raidsOffline: 3,        // höchstens so viele Überfälle je Abwesenheit
     luxuryMoral: 0.1,       // Moral je Luxusgut-Sorte mit Bestand
     luxuryUse: 0.001,       // Verbrauch je Knecht, Sekunde und Sorte
-    craftRate: 0.02,        // Ausführungen/s je Servitor in der Schmiede
+    craftRate: 0.02,        // Arbeitsgänge/s je Servitor in der Schmiede (ein Arbeitsgang = popScale Stück)
     servitorFill: 0.9,      // Servitoren nehmen nur aus Lagern, die so voll sind (Überschuss)
     preacherMoral: 0.005,   // Moral je Prediger …
     preacherMoralMax: 0.1,  // … höchstens so viel
@@ -80,7 +83,7 @@ const DATA = {
     orderEvery: 10,         // … höchstens alle 10 s …
     orderFill: 0.8,         // … aus Lagern, die so voll sind …
     orderPackages: 5,       // … oder von Waren ohne Lager so viele Pakete
-    servitorPlasteel: 5,    // Servitor erschaffen: 1 Knecht + so viel Plastahl
+    servitorPlasteel: 5,    // Servitor erschaffen: 1 Knecht + so viel Plastahl (beides ×popScale)
     scoutSpeedMax: 0.8,     // Aufklärung höchstens so viel kürzer
     campaignSpeedMax: 0.8,  // Feldzüge höchstens so viel kürzer
     campaignSquad: [5, 50], // Kämpfer je Feldzug
@@ -288,7 +291,7 @@ const DATA = {
   buildings: [
     { id: 'hydroFarm', name: 'Hydrokulturfarm', desc: 'Nährtanks im Schutt. In der Sonnenzeit wächst es am besten.',
       cost: { supplies: 10 }, ratio: 1.12, effects: { 'supplies.rate': 0.5 } },
-    { id: 'quarters', name: 'Knechtsquartier', desc: 'Ein abgedichteter Raum im Wrack. Platz für zwei Knechte.',
+    { id: 'quarters', name: 'Knechtsquartier', desc: 'Ein abgedichteter Trakt im Wrack. Pritschen in langen Reihen.',
       cost: { scrap: 12 }, ratio: 1.6, effects: { 'serfs.cap': 2 } },
     { id: 'scriptorium', name: 'Skriptorium', desc: 'Pulte, Kerzen, geborgene Datenkristalle. Schreiber sammeln Wissen.',
       cost: { scrap: 25, supplies: 10 }, ratio: 1.15, effects: { 'knowledge.cap': 100, 'knowledge.bonus': 0.05 },
@@ -303,7 +306,7 @@ const DATA = {
       requires: { tech: 'susan' } },
     { id: 'mine', name: 'Mine', desc: 'Ein Stollen in die Erzader. Knechte können als Bergleute arbeiten.',
       cost: { scrap: 60 }, ratio: 1.2, effects: { 'job.miner': 0.2, 'ore.cap': 80 }, requires: { place: 'orevein' } },
-    { id: 'cells', name: 'Zellentrakt', desc: 'Kahle Zellen für Brüder und Neophyten. Platz für fünf.',
+    { id: 'cells', name: 'Zellentrakt', desc: 'Kahle Zellen für Brüder und Neophyten. Reihe um Reihe.',
       cost: { scrap: 60, ore: 40 }, ratio: 1.25, effects: { 'marines.cap': 5 }, requires: { tech: 'cellcraft' } },
     { id: 'arena', name: 'Prüfungsarena', desc: 'Die Stämme schicken ihre Stärksten. Wenige bestehen.',
       cost: { scrap: 80, ore: 40 }, ratio: 1.4, effects: { 'aspirants.rate': 0.001, 'aspirants.cap': 2 },
@@ -321,7 +324,7 @@ const DATA = {
       cost: { ore: 100, scrap: 100 }, ratio: 1.15, effects: { 'craft.bonus': 0.06 }, requires: { tech: 'smithing' } },
     { id: 'refinery', name: 'Raffinerie', desc: 'Rohre, Ventile, ständiges Zischen. Knechte raffinieren Promethium.',
       cost: { ore: 80, scrap: 60 }, ratio: 1.2, effects: { 'promethium.cap': 60 }, requires: { tech: 'refining' } },
-    { id: 'hab', name: 'Hab-Block', desc: 'Plastahl-Wände, Stockbetten, Luftfilter. Platz für fünf Knechte.',
+    { id: 'hab', name: 'Hab-Block', desc: 'Plastahl-Wände, Stockbetten, Luftfilter. Ein ganzer Block voller Knechte.',
       cost: { plasteel: 5, ore: 60 }, ratio: 1.25, effects: { 'serfs.cap': 5 }, requires: { tech: 'construction' } },
     { id: 'warehouse', name: 'Lagerhalle', desc: 'Stahlträger und Ceramit-Böden. Viel Platz für alles.',
       cost: { plasteel: 5, ceramite: 3 }, ratio: 1.2,
@@ -555,7 +558,7 @@ const DATA = {
       effects: { 'geneseed.cap': 5 }, start: { res: { geneseed: 5 } } },
     { id: 'map', name: 'Karte der Vorfahren', desc: 'Wege, Adern und Stämme, von den Vätern verzeichnet.', cost: 20,
       start: { places: ['crashsite', 'orevein', 'tribes'] } },
-    { id: 'veterans', name: 'Veteranen-Trupp', desc: 'Fünf alte Brüder schlafen mit, bereit für den neuen Orden.', cost: 25,
+    { id: 'veterans', name: 'Veteranen-Trupp', desc: 'Alte Brüder schlafen mit, bereit für den neuen Orden.', cost: 25,
       effects: { 'marines.cap': 5 }, start: { coma: 5 } },
     { id: 'skulls', name: 'Servoschädel des Archivars', desc: 'Er erinnert sich an alles. Leider auch an alles Unwichtige.',
       cost: 30, effects: { 'knowledge.bonus': 0.15 } },
@@ -592,7 +595,7 @@ const DATA = {
       text: 'Warpsturm! Die Astropathen schweigen ein Jahr lang. Die Knechte beten mehr.',
       end: 'Der Warpsturm legt sich. Die Astropathen hören wieder.' },
     { id: 'waaagh', every: 6000, requires: { place: 'ashwaste' }, threat: 100,
-      text: 'WAAAGH! Die Orks der Aschewüste sammeln sich. Die Bedrohung steigt um 100.' },
+      text: 'WAAAGH! Die Orks der Aschewüste sammeln sich. Die Bedrohung steigt um {threat}.' },
     { id: 'cult', every: 10000, requires: { place: 'hive' }, effects: { 'arrival.bonus': -0.5 },
       text: 'Ein Genestealer-Kult nistet in der Makropol-Ruine. Neue Knechte kommen nur halb so oft.' },
   ],
@@ -640,28 +643,40 @@ const DATA = {
   ],
 };
 
-// Rechnet alle Kopf-Werte auf popScale um (einmal beim Laden): Köpfe ×P, Wirkung je Kopf ÷P. Das Tempo bleibt gleich.
+// Rechnet alle Mengen auf popScale um (einmal beim Laden): Köpfe, Waren, Kampfkraft und Bedrohung ×P.
+// Ertrag und Verbrauch je Kopf bleiben (beide Seiten ×P); was je Kopf als Anteil, Chance oder Zeit wirkt, wird ÷P.
+// Das Tempo bleibt gleich.
 function scalePop(D, P = D.rules.popScale) {
   const R = D.rules;
-  for (const k of ['serfFood', 'marineFood', 'aspirantFood', 'arrivalEvery', 'crowdPenalty', 'luxuryUse', 'apothecaryChance',
-    'apothecarySpeed', 'recoverApothecary', 'servitorScrap', 'craftRate', 'powerBrother', 'powerWulf', 'preacherMoral',
-    'priestMoral', 'thirstPriest']) R[k] /= P;
-  for (const k of ['crowdFree', 'comaBrothers', 'marineBase', 'litanyPerSerfs', 'companySize', 'foundBrothers',
-    'foundGeneseed', 'legacyBrothers']) R[k] *= P;
+  // Mengen unter den Effekten: Ertrag/s, Lager, feste Verteidigung, Flottenstärke, Navigationsdaten je Vision
+  const AMOUNT = k => /\.(rate|cap)$/.test(k) || ['defense.flat', 'fleet.power', 'vision.bonus'].includes(k);
+  const all = o => { for (const k in o || {}) o[k] *= P; };
+  const amounts = fx => { for (const k in fx || {}) if (AMOUNT(k)) fx[k] *= P; };
+  const perHead = fx => { for (const k in fx || {}) if (!AMOUNT(k)) fx[k] /= P; }; // je Kopf oder Stück
+  for (const k of ['crowdPenalty', 'apothecaryChance', 'apothecarySpeed', 'recoverApothecary', 'preacherMoral',
+    'priestMoral', 'thirstPriest', 'arrivalEvery', 'craftRate']) R[k] /= P;
+  for (const k of ['crowdFree', 'comaBrothers', 'marineBase', 'companySize', 'foundBrothers', 'foundGeneseed',
+    'legacyBrothers', 'legacyRenown', 'litanyCost', 'servitorPlasteel', 'threatRate', 'threatMax', 'clickGain',
+    'visionNav']) R[k] *= P;
   R.campaignSquad = R.campaignSquad.map(n => n * P);
-  const HEADS = ['serfs.cap', 'marines.cap', 'aspirants.rate', 'aspirants.cap', 'geneseed.cap'];
-  const heads = fx => { for (const k of HEADS) if (fx && k in fx) fx[k] *= P; };
-  D.resources.find(r => r.id === 'geneseed').cap *= P;
-  for (const b of D.buildings) heads(b.effects);
-  for (const x of [...D.jobs, ...D.offices]) for (const k in x.effects || {}) x.effects[k] /= P;
-  for (const p of D.places) if (p.reward?.geneseed) p.reward.geneseed *= P;
-  for (const m of D.missions) m.squad = m.squad.map(n => n * P);
-  for (const p of D.partners) if (p.get.serfs) p.get.serfs *= P;
-  for (const r of D.relics) {
-    heads(r.effects);
-    if (r.start?.coma) r.start.coma *= P;
-    if (r.start?.res?.geneseed) r.start.res.geneseed *= P;
+  for (const r of D.resources) { r.cap *= P; perHead(r.perUnit); }
+  for (const x of [...D.buildings, ...D.ships, ...D.upgrades, ...D.techs]) { all(x.cost); amounts(x.effects); }
+  for (const x of [...D.jobs, ...D.offices]) perHead(x.effects);
+  for (const x of [...D.places, ...D.systems, ...D.relics, ...D.chapters]) amounts(x.effects);
+  for (const x of D.places) all(x.reward);
+  for (const r of D.rites) r.cost *= P;
+  for (const m of D.missions) {
+    m.squad = m.squad.map(n => n * P);
+    all(m.loot);
+    for (const id in m.lucky || {}) m.lucky[id][1] *= P;
+    m.threat *= P;
+    if (m.calm) m.calm *= P;
   }
+  for (const p of D.partners) { all(p.give); all(p.get); }
+  for (const x of D.systems) { if (x.threat) x.threat *= P; if (x.nav) x.nav *= P; all(x.reward); }
+  for (const r of D.relics) { all(r.start?.res); if (r.start?.coma) r.start.coma *= P; }
+  for (const ev of Object.values(D.chapterEvents).flat()) { all(ev.gift); if (ev.calm) ev.calm *= P; }
+  for (const w of D.worldEvents) if (w.threat) w.threat *= P;
   return D;
 }
 scalePop(DATA);

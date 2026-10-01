@@ -12,7 +12,7 @@ const Engine = (() => {
   const BOON_KEYS = new Set(Object.values(D.chapterEvents).flat().flatMap(ev => Object.keys(ev.boon || {})));
   const THIRST_MAX = 100; // Roter Durst in Prozent
   const num = v => (Math.round(v * 10) / 10).toLocaleString('de-DE'); // Zahlen im Log
-  const P = R.popScale; // Köpfe je Schub (Etappe 10: ×100)
+  const P = R.popScale; // Etappe 10: alle Mengen ×P; Köpfe kommen in Schüben zu P, die Schmiede arbeitet in P Stück
   const CLICKS = new Set(D.clicks.map(c => c.id));
   const pad3 = n => String(n).padStart(3, '0');
 
@@ -60,10 +60,10 @@ const Engine = (() => {
     }
     if (s.meta.foundings) {
       log(s, `Der Nachfolgeorden ${s.name} ist gegründet. Linie: ${ch.name}.`);
-      log(s, `${s.marines.coma} Brüder der Gründung liegen im Sus-an-Koma. Kharos Tertius wartet.`);
+      log(s, `${num(s.marines.coma)} Brüder der Gründung liegen im Sus-an-Koma. Kharos Tertius wartet.`);
     } else {
       log(s, `Die „${ch.ship}“ ist über Kharos Tertius zerschellt. Du lebst.`);
-      log(s, 'Fünf Brüder liegen im Sus-an-Koma. Die Ruinen schweigen.');
+      log(s, `${num(s.marines.coma)} Brüder liegen im Sus-an-Koma. Die Ruinen schweigen.`);
     }
     return s;
   }
@@ -162,9 +162,11 @@ const Engine = (() => {
   const defense = s => power(s, freeBrothers(s) + officeCount(s) / 2, freeWulfen(s)) * (1 + bonus(s, 'defense.bonus'))
     + bonus(s, 'defense.flat');
   const companies = s => Math.floor(s.marines.brothers / R.companySize);
-  // Bonus auf die gesamte Produktion: Effekte, volle Kompanien, Frömmigkeit aus der Großen Messe (√F ÷ 10 %).
+  // Frömmigkeit aus der Großen Messe: √F ÷ 10 % (F in alten Einheiten, also ÷P).
+  const pietyBonus = piety => Math.sqrt(piety / P) / 1000;
+  // Bonus auf die gesamte Produktion: Effekte, volle Kompanien, Frömmigkeit.
   const productionBonus = s => bonus(s, 'production.bonus') + legacyPct(s)
-    + companies(s) * (R.companyBonus + bonus(s, 'company.bonus')) + Math.sqrt(s.piety) / 1000;
+    + companies(s) * (R.companyBonus + bonus(s, 'company.bonus')) + pietyBonus(s.piety);
   const officeName = (s, id) => OFF[id].names?.[s.chapter] || OFF[id].name;
   const brotherName = s => { const n = CH[s.chapter].names; return n[s.logSeq % n.length]; };
 
@@ -518,7 +520,7 @@ const Engine = (() => {
   const recipeOpen = (s, id) => !!(RECIPE[id] && s.bld.forge && isUnlocked(s, RES[id]));
   // Wie oft das Rezept gerade bezahlbar ist.
   const craftCount = (s, id) => Math.min(...Object.entries(RECIPE[id].cost).map(([r, v]) => Math.floor(s.res[r] / v + 1e-9)));
-  // Servitoren mit Rezept arbeiten in der Schmiede statt Schrott zu sammeln.
+  // Servitoren mit Rezept arbeiten in der Schmiede statt Schrott zu sammeln, je Arbeitsgang P Stück.
   // Sie verarbeiten nur Überschuss: Zutaten mit Lager erst ab servitorFill; Waren ohne Lager immer.
   const surplus = (s, id) => Object.keys(RECIPE[id].cost)
     .every(r => cap(s, r) === Infinity || s.res[r] >= R.servitorFill * cap(s, r) - 1e-9);
@@ -527,8 +529,8 @@ const Engine = (() => {
   function craftTick(s, dt) {
     if (!servitorsCrafting(s) || !s.marines.servitors) return;
     s.craftAcc += s.marines.servitors * R.craftRate * (1 + bonus(s, 'servitor.bonus')) * dt;
-    while (s.craftAcc >= 1 - 1e-9 && craftCount(s, s.servitorRecipe) >= 1 && surplus(s, s.servitorRecipe)) {
-      craft(s, s.servitorRecipe, 1);
+    while (s.craftAcc >= 1 - 1e-9 && craftCount(s, s.servitorRecipe) >= P && surplus(s, s.servitorRecipe)) {
+      craft(s, s.servitorRecipe, P);
       s.craftAcc -= 1;
     }
     s.craftAcc = Math.min(Math.max(0, s.craftAcc), 1); // fehlen Zutaten, staut sich nichts auf
@@ -712,7 +714,7 @@ const Engine = (() => {
     if (q.brothers > freeBrothers(s) || !canAfford(s, cost)) return false;
     pay(s, cost);
     s.campaign = { id, brothers: q.brothers, wulfen: q.wulfen, left: campaignTime(s, id) };
-    log(s, `Die Flotte bricht auf: Feldzug nach ${SYSTEM[id].name} mit ${size} Kämpfern.`);
+    log(s, `Die Flotte bricht auf: Feldzug nach ${SYSTEM[id].name} mit ${num(size)} Kämpfern.`);
     return true;
   }
 
@@ -756,7 +758,7 @@ const Engine = (() => {
         s.serfs += n;
         const job = JOB[s.autoJob];
         if (job && isUnlocked(s, job)) s.jobs[job.id] += n;
-        if (n) got.push(`+${n} ${n === 1 ? 'Knecht' : 'Knechte'}`);
+        if (n) got.push(`+${num(n)} ${n === 1 ? 'Knecht' : 'Knechte'}`);
         continue;
       }
       const v = p.get[r] * more;
@@ -797,7 +799,7 @@ const Engine = (() => {
     return true;
   }
   function gainVision(s) {
-    s.res.navdata += 1 + bonus(s, 'vision.bonus');
+    s.res.navdata += R.visionNav + bonus(s, 'vision.bonus');
     s.seen.navdata = true;
   }
 
@@ -823,7 +825,7 @@ const Engine = (() => {
     if (w.id === 'storm') { s.storm = R.yearLength; s.vision = 0; }
     if (w.threat) s.threat = Math.min(R.threatMax, s.threat + w.threat);
     dirty(s);
-    log(s, w.text);
+    log(s, w.text.replace('{threat}', num(w.threat || 0)));
   }
 
   // Aufträge, Visionen, Warpsturm und Welt-Ereignisse.
@@ -901,7 +903,7 @@ const Engine = (() => {
 
   function click(s, id) {
     if (!CLICKS.has(id) || s.res[id] >= cap(s, id)) return false;
-    s.res[id] = Math.min(cap(s, id), s.res[id] + 1);
+    s.res[id] = Math.min(cap(s, id), s.res[id] + R.clickGain);
     s.seen[id] = true;
     return true;
   }
@@ -991,7 +993,7 @@ const Engine = (() => {
     const run = { id, brothers: q.brothers, wulfen: q.wulfen, left: missionTime(s, m.time) };
     if (s.deathCompany) { run.dc = s.deathCompany; s.deathCompany = 0; }
     s.missions.push(run);
-    if (!quiet) log(s, `Ein Trupp aus ${size} Kämpfern bricht auf: ${m.name}.` + (run.dc ? ' Die Todeskompanie zieht mit.' : ''));
+    if (!quiet) log(s, `Ein Trupp aus ${num(size)} Kämpfern bricht auf: ${m.name}.` + (run.dc ? ' Die Todeskompanie zieht mit.' : ''));
     return true;
   }
 
@@ -1018,29 +1020,36 @@ const Engine = (() => {
   const save = s => JSON.stringify(s, (k, v) => (k[0] === '_' ? undefined : v));
 
   // v1 → v2 (Etappe 10): Köpfe ×P, Neophyten und Implantationen als Schübe zu P (gleiche Restzeit).
-  // Kompanien zählen weiter (1 alte Kompanie = 1 neue), Waren und Lager bleiben.
+  // v2 → v3 (Etappe 10, alles ×P): auch Waren, Bedrohung und Frömmigkeit ×P (Gensaat und Aspiranten zählten schon
+  // als Köpfe). Kompanien zählen weiter (1 alte Kompanie = 1 neue).
   function migrate(raw) {
-    if (raw.v >= 2) return raw;
+    if (raw.v >= 3) return raw;
     const x = v => (Number.isFinite(v) && v >= 0 ? v * P : v);
-    raw.serfs = x(raw.serfs);
-    raw.arrival = 0;
-    for (const key of ['jobs', 'offices', 'orders']) for (const id in raw[key] || {}) raw[key][id] = x(raw[key][id]);
-    if (raw.res && typeof raw.res === 'object') for (const id of ['aspirants', 'geneseed']) raw.res[id] = x(raw.res[id]);
-    const m = raw.marines;
-    if (m && typeof m === 'object') {
-      for (const k of ['coma', 'brothers', 'servitors', 'wulfen']) m[k] = x(m[k]);
-      const batches = list => (Array.isArray(list) ? list.filter(t => Number.isFinite(t) && t >= 0).map(left => ({ n: P, left })) : []);
-      m.neophytes = batches(m.neophytes);
-      m.implants = batches(m.implants);
+    const res = raw.res && typeof raw.res === 'object' ? raw.res : {};
+    if (raw.v < 2) {
+      raw.serfs = x(raw.serfs);
+      raw.arrival = 0;
+      for (const key of ['jobs', 'offices', 'orders']) for (const id in raw[key] || {}) raw[key][id] = x(raw[key][id]);
+      for (const id of ['aspirants', 'geneseed']) res[id] = x(res[id]);
+      const m = raw.marines;
+      if (m && typeof m === 'object') {
+        for (const k of ['coma', 'brothers', 'servitors', 'wulfen']) m[k] = x(m[k]);
+        const batches = list => (Array.isArray(list) ? list.filter(t => Number.isFinite(t) && t >= 0).map(left => ({ n: P, left })) : []);
+        m.neophytes = batches(m.neophytes);
+        m.implants = batches(m.implants);
+      }
+      for (const run of [...(Array.isArray(raw.missions) ? raw.missions : []), raw.campaign]) {
+        if (!run || typeof run !== 'object') continue;
+        run.brothers = x(run.brothers);
+        run.wulfen = x(run.wulfen);
+        if (run.dc) run.dc = x(run.dc);
+      }
+      raw.deathCompany = x(raw.deathCompany);
     }
-    for (const run of [...(Array.isArray(raw.missions) ? raw.missions : []), raw.campaign]) {
-      if (!run || typeof run !== 'object') continue;
-      run.brothers = x(run.brothers);
-      run.wulfen = x(run.wulfen);
-      if (run.dc) run.dc = x(run.dc);
-    }
-    raw.deathCompany = x(raw.deathCompany);
-    raw.v = 2;
+    for (const id in res) if (id !== 'aspirants' && id !== 'geneseed') res[id] = x(res[id]);
+    raw.threat = x(raw.threat);
+    raw.piety = x(raw.piety);
+    raw.v = 3;
     return raw;
   }
 
@@ -1165,7 +1174,7 @@ const Engine = (() => {
     power, chance, defense, canOrder, leanFood, craftYield, craftCount, upgradeVisible,
     needs, isUnlocked, price, canAfford, eta, click, build, research, assign, setOffice, scout,
     sendMission, setOrder, craft, buyUpgrade, setServitorRecipe, setAutoJob, save, load,
-    companies, productionBonus, litanyCost, litanyOpen, buyRite, chooseLitany, grandMass,
+    companies, productionBonus, pietyBonus, litanyCost, litanyOpen, buyRite, chooseLitany, grandMass,
     standingLevel, tradeYield, trade, setStandingOrder, catchVision, makeServitor,
     shipPrice, fleetPower, buildShip, reachable, campaignTime, campaignCost, campaignChance, startCampaign,
     legacyGain, foundBlock, found, buyRelic, offlineMax, binom, migrate,

@@ -29,39 +29,49 @@ nichts springt, Automatik statt Klicks, Freischaltungen folgen der Logik der Wel
 
 ## 1 Zahlen ×100 (Etappe 10)
 
-`rules.popScale = 100`. Alles, was Köpfe zählt, wird ×100; alles, was je Kopf wirkt, ÷100. Das Tempo bleibt gleich.
+`rules.popScale = 100`. Alle Mengen werden ×100: Köpfe, Waren, Lager, Kosten, Erträge, Beute, Kampfkraft und
+Bedrohung. Ertrag und Verbrauch je Kopf bleiben gleich (ein Knecht isst weiter 0,3 Vorräte/s), Anteile je Kopf
+(Gedränge, Ämter, Prediger) werden ÷100. Das Tempo bleibt gleich.
+
+Nachtrag 01.10.2026: Zuerst waren nur die Köpfe ×100, die Waren blieben. Der Nutzer wollte es durchgehend („dann müsste
+alles an Ressourcen auch angepasst werden“, „Das ganze Game entsprechend anpassen und balancen“), jetzt ist alles ×100.
 
 | Bereich | bisher | neu |
 |---|---|---|
 | Knechte-Plätze | Knechtsquartier +2, Hab-Block +5 | +200, +500 |
 | Zuzug | 1 Knecht je 20 s | erster Schub 100 auf einmal, danach laufend 5 Knechte/s, nur so viele, wie der Vorräte-Überschuss satt macht |
-| Essen | Knecht 0,3/s, Bruder 0,4/s, Aspirant 0,3/s | 0,003 / 0,004 / 0,003 |
-| Jobs je Knecht | Schrott 0,3, Bauer 1, Schreiber 0,15, Bergmann 0,25, Raffinerie 0,08, Prediger 0,05 | ÷100 |
+| Waren | Vorräte-Lager 200, Hydrokulturfarm 10 Vorräte, Kalender 15 Wissen | 20.000, 1.000, 1.500: alle Kosten, Lager, Erträge, Beute, Geschenke und Tauschpakete ×100 |
+| Klick | +1 Schrott oder Vorrat | +100 |
+| Essen und Jobs je Kopf | Knecht 0,3/s, Bruder 0,4/s; Bauer 1/s, Schrottsammler 0,3/s … | gleich |
 | Gedränge | −0,5 % je Knecht über 20 | −0,005 % je Knecht über 2.000 |
-| Luxus-Verbrauch | 0,001 je Knecht | 0,00001 je Knecht |
 | Flucht bei Hunger | 1 Knecht je 30 s | 100 Knechte je 30 s |
-| Überfall | 20 % Chance auf 1 verschleppten Knecht | 20 % Chance auf 100 |
-| Brüder-Plätze | Wrack 5, Zellentrakt +5 | 500, +500 |
-| Brüder im Sus-an-Koma | 5 | 500 |
+| Überfall | 20 % Chance auf 1 verschleppten Knecht, 10 % der Lager | 20 % Chance auf 100, 10 % der Lager |
+| Brüder-Plätze, Koma | Wrack 5, Zellentrakt +5; 5 im Koma | 500, +500; 500 |
 | Aspiranten | +0,001/s und Lager 2 je Arena | +0,1/s, Lager 200 |
-| Gensaat | Lager 3 (+3 je Apothecarion, +10 je Tresor), Absturzstelle +5 | Lager 300 (+300, +1.000), +500 |
-| Gensaat-Reifung | 0,0005/s je Bruder | gleich (Brüder und Gensaat wachsen beide ×100) |
+| Gensaat | Lager 3, Absturzstelle +5; Reifung 0,0005/s je Bruder | 300, +500; Reifung gleich |
 | Implantation | 1 Aspirant je Platz | Schub von 100 je Platz; Erfolg, Servitor und Tod je Kopf ausgewürfelt (Binomial) |
 | Neophyten | Liste mit Zeit je Neophyt | Schübe `{ n, left }` |
-| Servitoren | Schrott 0,15/s, Herstellung 0,02/s je Servitor; Zelle: 1 Knecht + 5 Plastahl | ÷100; Zelle: 100 Knechte + 5 Plastahl → 100 |
-| Ämter | Wirkung je Amtsträger | ÷100 (Apothecarius −20 % Dauer je 100, höchstens −60 %) |
-| Litanei-Kosten | 30 + 1 je 10 Knechte | 30 + 1 je 1.000 Knechte |
-| Kompanie | 100 Kampfbrüder | 10.000 Kampfbrüder |
-| Nachfolgeorden | 100 Brüder, 20 Gensaat; Vermächtnis 1 je 10 Brüder | 10.000 Brüder, 2.000 Gensaat; 1 je 1.000 Brüder |
-| Relikte | Veteranen-Trupp +5, Gensaat-Reserve +5 | +500, +500 |
-| Astra Militarum (Tausch) | 2 Knechte | 200 Knechte |
+| Schmiede | 1 Stück je Arbeitsgang; Knöpfe +1, +10 | 100 Stück je Arbeitsgang; Knöpfe +100, +1.000; Preis je Stück gleich (50 Schrott → 1 Plastahl) |
+| Servitoren | Schrott 0,15/s je Servitor; Zelle: 1 Knecht + 5 Plastahl | gleich; Zelle: 100 Knechte + 500 Plastahl → 100 |
+| Kampf | Kampfkraft 10 je Bruder; Bedrohung 20–2.500, +0,01/s, höchstens 500; Bastion +20 | Kampfkraft gleich; Bedrohung 2.000–250.000, +1/s, höchstens 50.000; Bastion +2.000 |
+| Ämter | Wirkung je Amtsträger | Waren je Kopf gleich; Anteile ÷100 (Apothecarius −20 % Dauer je 100) |
+| Litanei | 30 Glaube + 1 je 10 Knechte | 3.000 + 1 je 10 Knechte |
+| Frömmigkeit | Produktion +√F ÷ 10 % | gleich, mit F in alten Einheiten (÷100) |
+| Stückwirkung | Datentafel +50 Wissen-Lager, Servoschädel −2 % Aufklärung | +50 je Tafel; −2 % je 100 Schädel |
+| Visionen | 1 Navigationsdatum | 100 |
+| Kompanie | 100 Kampfbrüder | 10.000 |
+| Nachfolgeorden | 100 Brüder, 20 Gensaat; Vermächtnis 1 je 10 Brüder, 1 je 500 Ruhm | 10.000, 2.000; 1 je 1.000 Brüder, 1 je 50.000 Ruhm |
+| Relikte | Veteranen-Trupp +5, Gensaat-Reserve +5, Banner 50 Schrott | +500, +500, 5.000 |
+| Astra Militarum (Tausch) | 300 Vorräte → 2 Knechte | 30.000 → 200 |
 
-- Waren (Plastahl, Ceramit …), Wissen, Glaube, Ruhm, Archäotech und Lager bleiben in ihrer Größe.
+- Gleich bleiben: Zeiten, Prozente, Chancen, Moral, Roter Durst, Ansehen, Vermächtnis-Punkte, Zahl der Gebäude und Schiffe.
+- Anzeige: ganze Zahlen mit Tausenderpunkt bis 999.999, darüber „1,2 Mio.“.
 - Log fasst Massen zusammen: Zuzug höchstens eine Zeile je Minute („+300 Knechte ziehen ein“), Flucht, Verluste und
   Implantation als Summen. Brüder-Namen erscheinen nur noch bei Helden und in Flair-Zeilen.
 - Bedienung: „−“ und „+“ bei Jobs, Ämtern und Trupps bewegen 100; daneben „alle“ (alle freien dorthin) und „0“.
-- Umrechnung beim Laden (`saveVersion` 1 → 2): Köpfe ×100, Gensaat ×100, Neophyten- und Implantations-Listen werden
-  Schübe zu 100, Einsatz- und Feldzugstrupps ×100. Kompanien zählen weiter (1 alte Kompanie = 1 neue).
+- Umrechnung beim Laden: `saveVersion` 1 → 2: Köpfe ×100, Gensaat ×100, Neophyten- und Implantations-Listen werden
+  Schübe zu 100, Einsatz- und Feldzugstrupps ×100. 2 → 3: alle übrigen Waren ×100, dazu Bedrohung und Frömmigkeit.
+  Kompanien zählen weiter (1 alte Kompanie = 1 neue).
 
 ## 2 Makropole (Etappe 11)
 
