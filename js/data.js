@@ -1,8 +1,12 @@
 // Gensaat – alle Inhalte als Tabellen.
 // Zahlen sind Startwerte aus der Spec; der Tempo-Bot (node test.js tempo) prüft das Tempo.
+// Köpfe (Knechte, Brüder, Aspiranten, Gensaat, Servitoren) stehen hier je popScale Köpfe: „Knechtsquartier +2“
+// heißt +2 × popScale Plätze, „0,3 Vorräte/s je Knecht“ heißt je popScale Knechte. scalePop() am Dateiende rechnet um.
 const DATA = {
   rules: {
-    saveVersion: 1,
+    saveVersion: 2,
+    popScale: 100,          // Etappe 10: alles, was Köpfe zählt, ×100; alles, was je Kopf wirkt, ÷100
+    arrivalLogEvery: 60,    // Zuzug im Log höchstens einmal je Minute zusammengefasst
     yearLength: 1000,       // Sekunden je imperiales Jahr (Datum 0.FFF.JJJ.M42)
     seasonLength: 250,      // Sekunden je Planetenzeit
     startYear: 12,          // 012.M42
@@ -634,5 +638,31 @@ const DATA = {
       names: ['Temujin', 'Batu', 'Hasik', 'Jubal', 'Qasar', 'Otgon', 'Arik', 'Tamu'] },
   ],
 };
+
+// Rechnet alle Kopf-Werte auf popScale um (einmal beim Laden): Köpfe ×P, Wirkung je Kopf ÷P. Das Tempo bleibt gleich.
+function scalePop(D, P = D.rules.popScale) {
+  const R = D.rules;
+  for (const k of ['serfFood', 'marineFood', 'aspirantFood', 'arrivalEvery', 'crowdPenalty', 'luxuryUse', 'apothecaryChance',
+    'apothecarySpeed', 'recoverApothecary', 'servitorScrap', 'craftRate', 'powerBrother', 'powerWulf', 'preacherMoral',
+    'priestMoral', 'thirstPriest']) R[k] /= P;
+  for (const k of ['crowdFree', 'comaBrothers', 'marineBase', 'litanyPerSerfs', 'companySize', 'foundBrothers',
+    'foundGeneseed', 'legacyBrothers']) R[k] *= P;
+  R.campaignSquad = R.campaignSquad.map(n => n * P);
+  const HEADS = ['serfs.cap', 'marines.cap', 'aspirants.rate', 'aspirants.cap', 'geneseed.cap'];
+  const heads = fx => { for (const k of HEADS) if (fx && k in fx) fx[k] *= P; };
+  D.resources.find(r => r.id === 'geneseed').cap *= P;
+  for (const b of D.buildings) heads(b.effects);
+  for (const x of [...D.jobs, ...D.offices]) for (const k in x.effects || {}) x.effects[k] /= P;
+  for (const p of D.places) if (p.reward?.geneseed) p.reward.geneseed *= P;
+  for (const m of D.missions) m.squad = m.squad.map(n => n * P);
+  for (const p of D.partners) if (p.get.serfs) p.get.serfs *= P;
+  for (const r of D.relics) {
+    heads(r.effects);
+    if (r.start?.coma) r.start.coma *= P;
+    if (r.start?.res?.geneseed) r.start.res.geneseed *= P;
+  }
+  return D;
+}
+scalePop(DATA);
 
 if (typeof module !== 'undefined') module.exports = DATA;

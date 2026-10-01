@@ -34,7 +34,7 @@ nichts springt, Automatik statt Klicks, Freischaltungen folgen der Logik der Wel
 | Bereich | bisher | neu |
 |---|---|---|
 | Knechte-Plätze | Knechtsquartier +2, Hab-Block +5 | +200, +500 |
-| Zuzug | 1 Knecht je 20 s | laufend 5 Knechte/s, solange der Vorräte-Überschuss für 100 weitere reicht (≥ 0,3/s) |
+| Zuzug | 1 Knecht je 20 s | erster Schub 100 auf einmal, danach laufend 5 Knechte/s, nur so viele, wie der Vorräte-Überschuss satt macht |
 | Essen | Knecht 0,3/s, Bruder 0,4/s, Aspirant 0,3/s | 0,003 / 0,004 / 0,003 |
 | Jobs je Knecht | Schrott 0,3, Bauer 1, Schreiber 0,15, Bergmann 0,25, Raffinerie 0,08, Prediger 0,05 | ÷100 |
 | Gedränge | −0,5 % je Knecht über 20 | −0,005 % je Knecht über 2.000 |

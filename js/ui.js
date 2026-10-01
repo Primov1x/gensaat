@@ -38,6 +38,10 @@
     return d + (d === '1' ? ' Tag' : ' Tage');
   }
   const amount = (id, v, round) => { const n = fmt(v, round); return `${n} ${n === '1' ? RES[id].one : RES[id].name}`; };
+  // Köpfe (Etappe 10: in Schüben zu P): ganze Zahl mit Tausenderpunkt, ab einer Million kurz.
+  const P = D.rules.popScale;
+  const nHeads = n => (Math.abs(n) < 1e6 ? N0.format(Math.floor(n + 1e-9)) : fmt(n, down));
+  const sumHeads = list => list.reduce((n, b) => n + b.n, 0);
 
   const pct = v => `${v < 0 ? '−' : '+'}${Math.round(Math.abs(v) * 100)} %`;
   const EFFECT_TEXT = {
@@ -152,9 +156,9 @@
   const thirsty = () => !!E.effects(S).thirst;
   // Wirkungen, die in den Regeln statt in effects stehen
   const EXTRA = {
-    preacher: () => `Moral +${N1.format(D.rules.preacherMoral * 100)} % (höchstens +${Math.round(D.rules.preacherMoralMax * 100)} %)`,
-    priest: () => `Moral +${Math.round(D.rules.priestMoral * 100)} %`
-      + (thirsty() ? `, Roter Durst −${N1.format(D.rules.thirstPriest * 60)} %/Min.` : ''),
+    preacher: () => `Moral +${N1.format(D.rules.preacherMoral * P * 100)} % (höchstens +${Math.round(D.rules.preacherMoralMax * 100)} %)`,
+    priest: () => `Moral +${Math.round(D.rules.priestMoral * P * 100)} %`
+      + (thirsty() ? `, Roter Durst −${N1.format(D.rules.thirstPriest * P * 60)} %/Min.` : ''),
   };
   const extra = id => (EXTRA[id] ? ' · ' + EXTRA[id]() : '');
 
@@ -165,7 +169,7 @@
       key: 'summary',
       make: () => { const el = document.createElement('div'); el.className = 'summary'; return { el }; },
       update: k => html(k.el,
-        `<p>Knechte <b>${S.serfs} / ${fmt(E.serfCap(S))}</b> · frei <b>${E.free(S)}</b></p>` +
+        `<p>Knechte <b>${nHeads(S.serfs)} / ${fmt(E.serfCap(S))}</b> · frei <b>${nHeads(E.free(S))}</b></p>` +
         `<p>Moral <b>${Math.round(E.moral(S) * 100)} %</b>${S.isHungry ? ' · <span class="miss">Hunger</span>' : ''}</p>` +
         `<p class="muted hint">${HINTS[E.arrivalBlock(S)] || ''}</p>`),
     }];
@@ -174,13 +178,9 @@
       items.push({
         key: 'job:' + j.id,
         make: () => stepRow(j.name,
-          Object.entries(j.effects).map(([key, v]) => effectText(key, v)).join(', ') + ' je Knecht' + extra(j.id),
-          d => E.assign(S, j.id, d)),
-        update: k => {
-          text(k.name, `${j.name}: ${S.jobs[j.id]}`);
-          k.minus.disabled = S.jobs[j.id] < 1;
-          k.plus.disabled = E.free(S) < 1;
-        },
+          Object.entries(j.effects).map(([key, v]) => effectText(key, v * P)).join(', ') + ` je ${nHeads(P)} Knechte` + extra(j.id),
+          d => E.assign(S, j.id, d), () => S.jobs[j.id], () => E.free(S)),
+        update: k => { text(k.name, `${j.name}: ${nHeads(S.jobs[j.id])}`); k.update(); },
       });
     }
     if (S.tech.munitorum) {
@@ -203,13 +203,10 @@
       items.push({
         key: 'office:' + o.id,
         make: () => stepRow(E.officeName(S, o.id),
-          (o.effects ? Object.entries(o.effects).map(([key, v]) => effectText(key, v)).join(', ') + ' je Bruder' : o.desc) + extra(o.id),
-          d => E.setOffice(S, o.id, d)),
-        update: k => {
-          text(k.name, `${E.officeName(S, o.id)}: ${S.offices[o.id]}`);
-          k.minus.disabled = S.offices[o.id] < 1;
-          k.plus.disabled = E.freeBrothers(S) < 1;
-        },
+          (o.effects ? Object.entries(o.effects).map(([key, v]) => effectText(key, v * P)).join(', ') + ` je ${nHeads(P)} Brüder`
+            : o.desc) + extra(o.id),
+          d => E.setOffice(S, o.id, d), () => S.offices[o.id], () => E.freeBrothers(S)),
+        update: k => { text(k.name, `${E.officeName(S, o.id)}: ${nHeads(S.offices[o.id])}`); k.update(); },
       });
     }
     return items;
@@ -251,10 +248,10 @@
     if (S.bld.servitorCell) {
       items.push({
         key: 'makeServitor',
-        make: () => { const k = card(() => E.makeServitor(S)); k.name.textContent = 'Servitor erschaffen'; return k; },
+        make: () => { const k = card(() => E.makeServitor(S)); k.name.textContent = `${nHeads(P)} Servitoren erschaffen`; return k; },
         update: k => {
-          html(k.sub, `1 Knecht · ${costHtml({ plasteel: D.rules.servitorPlasteel })}`);
-          setOff(k, S.serfs < 1 || S.res.plasteel < D.rules.servitorPlasteel - 1e-9);
+          html(k.sub, `${nHeads(P)} Knechte · ${costHtml({ plasteel: D.rules.servitorPlasteel })}`);
+          setOff(k, S.serfs < P || S.res.plasteel < D.rules.servitorPlasteel - 1e-9);
         },
       });
     }
@@ -299,40 +296,51 @@
     for (const b of k.btns) b.disabled = none;
   }
 
-  // Zeile mit Name, Beschreibung und −/+ (Jobs, Ämter).
-  function stepRow(label, sub, change) {
+  // Zeile mit Name, Beschreibung und 0 / − / + / alle (Jobs, Ämter): − und + bewegen P Köpfe.
+  // have(): wie viele hier sind, spare(): wie viele frei sind.
+  function stepRow(label, sub, change, have, spare) {
     const el = document.createElement('div');
     el.className = 'job';
     el.innerHTML = '<div class="job-text"><span class="name"></span><span class="sub"></span></div>' +
-      `<button class="step" type="button" aria-label="${label} weniger">−</button>` +
-      `<button class="step" type="button" aria-label="${label} mehr">+</button>`;
-    const [minus, plus] = el.querySelectorAll('.step');
-    minus.addEventListener('click', () => { if (change(-1)) render(); });
-    plus.addEventListener('click', () => { if (change(1)) render(); });
+      `<button class="step c-btn" type="button" aria-label="${label}: keine">0</button>` +
+      `<button class="step" type="button" aria-label="${label}: ${nHeads(P)} weniger">−</button>` +
+      `<button class="step" type="button" aria-label="${label}: ${nHeads(P)} mehr">+</button>` +
+      `<button class="step c-btn" type="button" aria-label="${label}: alle freien">alle</button>`;
+    const [zero, minus, plus, all] = el.querySelectorAll('.step');
+    const go = d => { if (d && change(d)) render(); };
+    zero.addEventListener('click', () => go(-have()));
+    minus.addEventListener('click', () => go(-Math.min(P, have())));
+    plus.addEventListener('click', () => go(Math.min(P, spare())));
+    all.addEventListener('click', () => go(spare()));
     el.querySelector('.sub').textContent = sub;
-    return { el, minus, plus, name: el.querySelector('.name') };
+    const update = () => {
+      zero.disabled = minus.disabled = have() < 1;
+      plus.disabled = all.disabled = spare() < 1;
+    };
+    return { el, update, name: el.querySelector('.name') };
   }
 
   const IMPLANT_HINTS = {
     aspirant: 'Implantation wartet auf einen Aspiranten.', geneseed: 'Implantation wartet auf Gensaat.',
-    slot: 'Alle Implantationsplätze sind belegt.', cells: 'Für neue Brüder fehlt eine Zelle.',
-    food: 'Implantation wartet: Im Frost reichen die Vorräte nicht für einen Bruder mehr.',
+    slot: 'Alle Implantationsplätze sind belegt.', cells: 'Für neue Brüder fehlen Zellen.',
+    food: 'Implantation wartet: Im Frost reichen die Vorräte nicht für weitere Brüder.',
   };
 
   // Vier feste Zeilen, damit darunter nichts springt.
   function marineSummary() {
     const m = S.marines, block = E.implantBlock(S);
-    const next = list => (list.length ? Math.min(...list) : 0);
-    const implant = m.implants.length ? `Implantation läuft · fertig in ${fmtTime(next(m.implants) / implantSpeed())}`
-      : block && block !== 'lore' ? IMPLANT_HINTS[block] : '';
-    const train = m.neophytes.length ? `Ausbildung · nächster Kampfbruder in ${fmtTime(next(m.neophytes) / trainSpeed())}` : '';
+    const next = list => (list.length ? Math.min(...list.map(b => b.left)) : 0);
+    const implant = m.implants.length ? `Implantation läuft (${nHeads(sumHeads(m.implants))} Aspiranten) · fertig in `
+      + fmtTime(next(m.implants) / implantSpeed()) : block && block !== 'lore' ? IMPLANT_HINTS[block] : '';
+    const train = m.neophytes.length ? `Ausbildung · nächste Kampfbrüder in ${fmtTime(next(m.neophytes) / trainSpeed())}` : '';
     const c = E.companies(S), each = D.rules.companyBonus + (E.effects(S)['company.bonus'] || 0);
     const thirst = thirsty() ? `<p>Roter Durst <b>${Math.floor(S.thirst)} %</b>` +
       (S.deathCompany ? ' · <span class="miss">Die Todeskompanie wartet auf den nächsten Kampf</span>' : '') + '</p>' : '';
-    return `<p>Kampfbrüder <b>${m.brothers}</b> · Neophyten <b>${m.neophytes.length}</b> · frei <b>${E.freeBrothers(S)}</b></p>` +
-      `<p>Brüder-Plätze <b>${E.marinesUsed(S)} / ${fmt(E.marineCap(S))}</b></p>` +
+    return `<p>Kampfbrüder <b>${nHeads(m.brothers)}</b> · Neophyten <b>${nHeads(sumHeads(m.neophytes))}</b>` +
+      ` · frei <b>${nHeads(E.freeBrothers(S))}</b></p>` +
+      `<p>Brüder-Plätze <b>${nHeads(E.marinesUsed(S))} / ${fmt(E.marineCap(S))}</b></p>` +
       `<p class="muted">${implant}</p><p class="muted">${train}</p>` +
-      `<p>Kompanien <b>${c}</b> · nächste bei <b>${m.brothers} / ${(c + 1) * D.rules.companySize}</b> Kampfbrüdern` +
+      `<p>Kompanien <b>${c}</b> · nächste bei <b>${nHeads(m.brothers)} / ${nHeads((c + 1) * D.rules.companySize)}</b> Kampfbrüdern` +
       ` · je Kompanie Produktion ${pct(each)}</p>` + thirst;
   }
   // Nur für die Anzeige der Restzeit; die Engine rechnet genauso.
@@ -343,8 +351,8 @@
     const items = [{
       key: 'summary',
       make: () => { const el = document.createElement('div'); el.className = 'summary'; return { el }; },
-      update: k => html(k.el, `<p>Freie Kampfbrüder <b>${E.freeBrothers(S)}</b></p>` +
-        '<p class="muted hint">Aufklärung: ein Bruder erkundet einen Ort.</p>'),
+      update: k => html(k.el, `<p>Freie Kampfbrüder <b>${nHeads(E.freeBrothers(S))}</b></p>` +
+        `<p class="muted hint">Aufklärung: ein Trupp aus ${nHeads(P)} Brüdern erkundet einen Ort.</p>`),
     }];
     for (const p of D.places) {
       items.push({
@@ -354,8 +362,8 @@
           const st = E.placeState(S, p.id), away = S.scouts.find(x => x.place === p.id);
           text(k.name, st === 'hidden' ? '???' : p.name);
           text(k.sub, st === 'done' ? 'entdeckt' : st === 'away' ? `unterwegs · noch ${fmtTime(away.left)}`
-            : st === 'hidden' ? 'noch unbekannt' : `1 Bruder · ${fmtTime(E.missionTime(S, p.time, true))}`);
-          setOff(k, st !== 'open' || E.freeBrothers(S) < 1);
+            : st === 'hidden' ? 'noch unbekannt' : `${nHeads(P)} Brüder · ${fmtTime(E.missionTime(S, p.time, true))}`);
+          setOff(k, st !== 'open' || E.freeBrothers(S) < P);
           k.el.classList.toggle('done', st === 'done');
           k.info.disabled = st === 'hidden';
         },
@@ -381,7 +389,8 @@
       : `Nächste Prüfung in ${fmtTime(D.rules.raidEvery - S.raidTimer)} · ` +
         (raidDue() ? '<span class="miss">Überfall droht</span>' : 'die Mauern halten');
     return `<p>${threat}</p><p class="muted">${next}</p>` +
-      `<p>Freie Kämpfer <b>${E.freeBrothers(S) + E.freeWulfen(S)}</b>${S.marines.wulfen ? ` · davon Wulfen <b>${E.freeWulfen(S)}</b>` : ''}` +
+      `<p>Freie Kämpfer <b>${nHeads(E.freeBrothers(S) + E.freeWulfen(S))}</b>`
+      + `${S.marines.wulfen ? ` · davon Wulfen <b>${nHeads(E.freeWulfen(S))}</b>` : ''}` +
       `${S.deathCompany ? ' · <span class="miss">Todeskompanie zieht mit (doppelte Kampfkraft)</span>' : ''}</p>`;
   }
 
@@ -404,8 +413,8 @@
       if (S.orders[m.id]) E.setOrder(S, m.id, sizes[m.id]);
       render();
     };
-    minus.addEventListener('click', () => resize(-1));
-    plus.addEventListener('click', () => resize(1));
+    minus.addEventListener('click', () => resize(-P));
+    plus.addEventListener('click', () => resize(P));
     go.addEventListener('click', () => { if (E.sendMission(S, m.id, size())) render(); });
     rep.addEventListener('change', () => { E.setOrder(S, m.id, rep.checked ? size() : 0); render(); });
     el.addEventListener('mouseenter', () => showTip(el, { kind: 'mission', item: m }));
@@ -420,7 +429,7 @@
     const loot = Object.entries(m.loot).map(([id, v]) => amount(id, v)).join(', ');
     text(k.stats, run ? `Unterwegs · zurück in ${fmtTime(run.left)}`
       : `Bedrohung ${m.threat} · ${fmtTime(E.missionTime(S, m.time))} · ${loot}`);
-    text(k.sizeEl, `${n} Kämpfer`);
+    text(k.sizeEl, `${nHeads(n)} Kämpfer`);
     text(k.chanceEl, `Chance ${Math.round(c * 100)} %`);
     k.chanceEl.classList.toggle('miss', c < 0.5);
     k.minus.disabled = !!run || n <= m.squad[0];
@@ -521,7 +530,7 @@
   }
 
   const packet = (get, more) => Object.entries(get)
-    .map(([id, v]) => (id === 'serfs' ? `${Math.floor(v * more + 1e-9)} Knechte` : amount(id, v * more))).join(', ');
+    .map(([id, v]) => (id === 'serfs' ? `${nHeads(v * more)} Knechte` : amount(id, v * more))).join(', ');
 
   function updatePartner(k, p) {
     const lvl = E.standingLevel(S, p.id), next = D.rules.standingLevels[lvl], low = lvl < D.rules.orderLevel;
@@ -585,8 +594,8 @@
     const [minus, plus] = el.querySelectorAll('.step'), go = el.querySelector('.m-go'), [min, max] = D.rules.campaignSquad;
     const size = () => campSizes[x.id] ?? Math.min(max, Math.max(min, E.freeBrothers(S) + E.freeWulfen(S)));
     const resize = d => { campSizes[x.id] = Math.min(max, Math.max(min, size() + d)); render(); };
-    minus.addEventListener('click', () => resize(-1));
-    plus.addEventListener('click', () => resize(1));
+    minus.addEventListener('click', () => resize(-P));
+    plus.addEventListener('click', () => resize(P));
     go.addEventListener('click', () => { if (E.startCampaign(S, x.id, size())) render(); });
     return { el, minus, plus, go, size, stats: el.querySelector('.m-stats'), gain: el.querySelector('.c-gain'),
       sizeEl: el.querySelector('.m-size'), chanceEl: el.querySelector('.m-chance') };
@@ -600,7 +609,7 @@
     const gain = [...effectList(x.effects), ...Object.entries(x.reward || {}).map(([id, v]) => '+' + amount(id, v)),
       ...(x.legacy ? [`Vermächtnis +${x.legacy}`] : [])];
     text(k.gain, 'Befreit: ' + (gain.join(', ') || 'Ruhm und Ehre'));
-    text(k.sizeEl, `${n} Kämpfer`);
+    text(k.sizeEl, `${nHeads(n)} Kämpfer`);
     text(k.chanceEl, `Chance ${Math.round(c * 100)} %`);
     k.chanceEl.classList.toggle('miss', c < 0.5);
     k.minus.disabled = run || n <= min;
@@ -650,7 +659,7 @@
     ...Object.entries(st.res || {}).map(([id, v]) => '+' + amount(id, v)),
     ...Object.entries(st.bld || {}).map(([id, v]) => `${v}× ${BLD[id].name}`),
     ...(st.tech || []).map(id => TECH[id].name), ...(st.places || []).map(id => PLACE[id].name),
-    ...(st.coma ? [`${st.coma} Brüder mehr im Koma`] : []),
+    ...(st.coma ? [`${nHeads(st.coma)} Brüder mehr im Koma`] : []),
   ].join(', ');
 
   function legacySummary() {
@@ -833,13 +842,13 @@
     const m = S.marines, pop = (show, key, icon, name, value) => {
       if (show || $('pop-list').querySelector(`[data-k="${key}"]`)) text(resRow($('pop-list'), key, icon, name).children[2], value);
     };
-    pop(S.seen.serfs, 'serfs', 'i-serfs', 'Knechte', `${S.serfs} / ${fmt(E.serfCap(S))}`);
-    pop(S.seen.marines, 'brothers', 'i-brother', 'Kampfbrüder', `${m.brothers}`);
+    pop(S.seen.serfs, 'serfs', 'i-serfs', 'Knechte', `${nHeads(S.serfs)} / ${fmt(E.serfCap(S))}`);
+    pop(S.seen.marines, 'brothers', 'i-brother', 'Kampfbrüder', nHeads(m.brothers));
     pop(E.isUnlocked(S, RES.aspirants), 'aspirants', 'i-aspirant', 'Aspiranten',
-      `${Math.floor(S.res.aspirants + 1e-9)} / ${fmt(E.cap(S, 'aspirants'))}`);
-    pop(m.neophytes.length > 0, 'neophytes', 'i-neophyte', 'Neophyten', `${m.neophytes.length}`);
-    pop(m.servitors > 0, 'servitors', 'i-servitor', 'Servitoren', `${m.servitors}`);
-    pop(m.wulfen > 0, 'wulfen', 'i-wulf', 'Wulfen', `${m.wulfen}`);
+      `${nHeads(S.res.aspirants)} / ${fmt(E.cap(S, 'aspirants'))}`);
+    pop(m.neophytes.length > 0, 'neophytes', 'i-neophyte', 'Neophyten', nHeads(sumHeads(m.neophytes)));
+    pop(m.servitors > 0, 'servitors', 'i-servitor', 'Servitoren', nHeads(m.servitors));
+    pop(m.wulfen > 0, 'wulfen', 'i-wulf', 'Wulfen', nHeads(m.wulfen));
   }
 
   function renderTabs() {
@@ -921,7 +930,7 @@
       const gets = [...Object.entries(item.reward || {}).map(([id, v]) => '+' + amount(id, v)), ...effectList(item.effects),
         ...opensByPlace(item.id)];
       return `<p class="muted">Bringt: ${gets.join(', ') || 'Überblick'}</p>` +
-        `<p class="muted">Dauer: ${fmtTime(E.missionTime(S, item.time, true))} mit 1 Bruder</p>`;
+        `<p class="muted">Dauer: ${fmtTime(E.missionTime(S, item.time, true))} mit ${nHeads(P)} Brüdern</p>`;
     }
     if (kind === 'relic') {
       const parts = [...effectList(item.effects), ...(item.start ? ['Start: ' + startText(item.start)] : [])];
@@ -959,7 +968,7 @@
       what = 'Wirkung: ' + effectList(item.effects).join(', ');
       const coma = S.marines.coma;
       if (item.id === 'apothecarion' && coma) {
-        what += ` · Weckt ${coma} Brüder, sie essen zusammen ${N1.format(coma * D.rules.marineFood)} Vorräte/s`;
+        what += ` · Weckt ${nHeads(coma)} Brüder, sie essen zusammen ${N1.format(coma * D.rules.marineFood)} Vorräte/s`;
       }
     }
     else {
@@ -1032,7 +1041,7 @@
     }
     awaySum = sum;
     const lines = [];
-    const count = (v, one, many) => { if (v) lines.push(`${v > 0 ? '+' : '−'}${Math.abs(v)} ${Math.abs(v) === 1 ? one : many}`); };
+    const count = (v, one, many) => { if (v) lines.push(`${v > 0 ? '+' : '−'}${nHeads(Math.abs(v))} ${Math.abs(v) === 1 ? one : many}`); };
     count(sum.serfs, 'Knecht', 'Knechte');
     count(sum.brothers, 'Kampfbruder', 'Kampfbrüder');
     for (const r of D.resources) {

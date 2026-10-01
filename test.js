@@ -10,6 +10,11 @@ const near = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-6, `${what}: ${a} st
 const byId = (list, id) => list.find(x => x.id === id);
 // Dark Angels haben in Etappe 1 keine wirksamen Ordenswerte: neutraler Stand für die meisten Tests.
 const fresh = (ch = 'da') => E.create(ch);
+// Etappe 10: Köpfe zählen in Schüben zu P (rules.popScale). Tests rechnen mit P statt mit festen Zahlen.
+const P = D.rules.popScale;
+const de = n => n.toLocaleString('de-DE');          // Zahl wie im Log
+const fill = (n, v) => Array(n).fill(v);             // Würfelfolgen je Kopf
+const heads = list => list.reduce((n, b) => n + b.n, 0);
 
 test('Daten: jede verwiesene Id existiert', () => {
   const ids = list => {
@@ -165,7 +170,7 @@ test('Preise steigen mit dem Faktor, White Scars zahlen 15 % mehr', () => {
   assert.ok(E.build(s, 'quarters'));
   near(s.res.scrap, 60 - 12 - 19.2, 'bezahlt (12 + 19,2)');
   near(E.price(s, 'building', 'quarters').scrap, 30.72, 'drittes Quartier');
-  assert.strictEqual(E.serfCap(s), 4);
+  assert.strictEqual(E.serfCap(s), 4 * P);
   s.res.scrap = 60;
   assert.strictEqual(E.build(s, 'storehouse'), false);   // bezahlbar, aber noch nicht erforscht
   const ws = fresh('ws');
@@ -229,7 +234,8 @@ test('Jobs verteilen', () => {
   assert.strictEqual(E.assign(s, 'scrapper', 1), false);      // keine frei
   assert.ok(E.assign(s, 'scrapper', -1));
   assert.strictEqual(E.free(s), 1);
-  assert.strictEqual(E.assign(s, 'scrapper', 0), false);      // nur +1 oder -1
+  assert.strictEqual(E.assign(s, 'scrapper', 0), false);      // 0 bewegt nichts
+  assert.strictEqual(E.assign(s, 'scrapper', 0.5), false);    // nur ganze Köpfe
   s.tech.hydroponics = true;
   assert.strictEqual(E.assign(s, 'farmer', -1), false);       // niemand zum Abziehen
   assert.ok(E.assign(s, 'farmer', 1));
@@ -238,7 +244,7 @@ test('Jobs verteilen', () => {
 
 test('Produktion: Gebäude, Jobs, Essen, Planetenzeiten', () => {
   const s = fresh();
-  s.bld.hydroFarm = 2; s.serfs = 2; s.jobs.scrapper = 1; s.res.supplies = 50;
+  s.bld.hydroFarm = 2; s.serfs = 2 * P; s.jobs.scrapper = P; s.res.supplies = 50;
   near(E.rates(s).supplies, 0.65, 'Sonnenzeit: 2 × 0,5 × 1,25 − 2 × 0,3');
   near(E.rates(s).scrap, 0.3, 'Schrott');
   E.step(s, 10);
@@ -253,10 +259,10 @@ test('Produktion: Gebäude, Jobs, Essen, Planetenzeiten', () => {
 
 test('Lager deckelt, Klick am Limit geht nicht', () => {
   const s = fresh();
-  s.res.scrap = 149.5; s.res.supplies = 100; s.serfs = 1; s.jobs.scrapper = 1;
+  s.res.scrap = 149.5; s.res.supplies = 100; s.serfs = P; s.jobs.scrapper = P;
   E.step(s, 10);
   near(s.res.scrap, 150, 'Schrott am Limit');
-  near(s.res.supplies, 97, 'ein Knecht isst 0,3/s');
+  near(s.res.supplies, 97, 'P Knechte essen 0,3/s');
   assert.strictEqual(E.click(s, 'scrap'), false);
   assert.ok(E.click(s, 'supplies'));
   near(s.res.supplies, 98, 'Vorrat geborgen');
@@ -264,33 +270,37 @@ test('Lager deckelt, Klick am Limit geht nicht', () => {
 
 test('Schreiber mit Skriptorium, Bauer in der Sonnenzeit', () => {
   const s = fresh();
-  s.seen.serfs = true; s.tech.hydroponics = true; s.serfs = 2; s.res.scrap = 25; s.res.supplies = 50;
+  s.seen.serfs = true; s.tech.hydroponics = true; s.serfs = 2 * P; s.res.scrap = 25; s.res.supplies = 50;
   assert.ok(E.build(s, 'scriptorium'));
-  assert.ok(E.assign(s, 'scribe', 1));
+  assert.ok(E.assign(s, 'scribe', P));
   near(E.rates(s).knowledge, 0.15 * 1.05, 'Schreiber +5 % durch das Skriptorium');
   const before = E.rates(s).supplies;
-  assert.ok(E.assign(s, 'farmer', 1));
-  near(E.rates(s).supplies - before, 1.25, 'Bauer wirkt sofort (× 1,25)');
+  assert.ok(E.assign(s, 'farmer', P));
+  near(E.rates(s).supplies - before, 1.25, 'Bauern wirken sofort (× 1,25)');
 });
 
-test('Zuzug: der erste kommt immer, weitere nur mit genug Vorräten', () => {
+test('Zuzug: der erste Schub kommt immer, danach stetig, solange die Vorräte reichen', () => {
   const s = fresh();
   s.bld.quarters = 2; s.res.supplies = 100;
   E.step(s, 20);
-  assert.strictEqual(s.serfs, 1);                            // der erste auch ohne Farm
-  assert.match(s.log.at(-1).text, /Überlebender/);
-  assert.strictEqual(s.meta.honors.at(-1).text, 'Der erste Knecht schließt sich dem Orden an.');
+  assert.strictEqual(s.serfs, P);                            // der erste Schub auf einmal, auch ohne Farm
+  assert.match(s.log.at(-1).text, /Überlebende/);
+  assert.strictEqual(s.meta.honors.at(-1).text, 'Die ersten Knechte schließen sich dem Orden an.');
   E.step(s, 40);
-  assert.strictEqual(s.serfs, 1);                            // ohne Überschuss kein zweiter
+  assert.strictEqual(s.serfs, P);                            // ohne Überschuss keine weiteren
   assert.strictEqual(E.arrivalBlock(s), 'food');
   s.res.scrap = 30;
-  assert.ok(E.build(s, 'hydroFarm'));                        // 0,75/s, einer isst 0,3
+  assert.ok(E.build(s, 'hydroFarm'));                        // Sonnenzeit 0,625/s, P essen 0,3
   assert.strictEqual(E.arrivalBlock(s), null);
   E.step(s, 20);
-  assert.strictEqual(s.serfs, 2);
-  assert.match(s.log.at(-1).text, /schließt sich dem Orden an/);
+  assert.strictEqual(s.serfs, 2 * P);                        // P je 20 s (5/s bei P = 100)
+  assert.match(s.log.at(-1).text, /Überlebende/);            // das Log fasst zusammen, noch keine Zeile
   E.step(s, 60);
-  assert.strictEqual(s.serfs, 2);                            // 0,75 − 0,6 reicht nicht für einen dritten
+  const full = Math.floor(0.625 / D.rules.serfFood + 1e-9);  // nur so viele, wie satt werden
+  assert.strictEqual(s.serfs, full);
+  assert.strictEqual(E.arrivalBlock(s), 'food');
+  assert.strictEqual(s.isHungry, false);
+  assert.strictEqual(s.log.at(-1).text, `+${de(full - P)} Knechte ziehen ein.`);   // eine Zeile, wenn der Zuzug stockt
 });
 
 test('Zuzug: in der Frostzeit kommt niemand', () => {
@@ -301,14 +311,14 @@ test('Zuzug: in der Frostzeit kommt niemand', () => {
   E.step(s, 240);
   assert.strictEqual(s.serfs, 0);
   E.step(s, 30);                                             // ab 1.000 wieder Sonnenzeit
-  assert.strictEqual(s.serfs, 1);
+  assert.strictEqual(s.serfs, P);                            // der erste Schub nach 20 s
 });
 
 test('Ultramarines: Knechte kommen 10 % schneller', () => {
   const um = fresh('um');
   um.bld.quarters = 2; um.res.supplies = 100;
   E.step(um, 18.2);
-  assert.strictEqual(um.serfs, 1);                           // 20 s ÷ 1,1 ≈ 18,18 s
+  assert.strictEqual(um.serfs, P);                           // 20 s ÷ 1,1 ≈ 18,18 s
   const da = fresh();
   da.bld.quarters = 2; da.res.supplies = 100;
   E.step(da, 18.2);
@@ -317,42 +327,42 @@ test('Ultramarines: Knechte kommen 10 % schneller', () => {
 
 test('Hunger: Moral −30 % (nicht für Bauern), nach 30 s flieht einer', () => {
   const s = fresh();
-  s.tech.hydroponics = true; s.bld.quarters = 1; s.serfs = 2; s.jobs.scrapper = 1; s.jobs.farmer = 1;
-  s.time = 750;                                              // Frostzeit: Bauer 0,5/s, zwei essen 0,6
+  s.tech.hydroponics = true; s.bld.quarters = 1; s.serfs = 2 * P; s.jobs.scrapper = P; s.jobs.farmer = P;
+  s.time = 750;                                              // Frostzeit: Bauern 0,5/s, 2 P essen 0,6
   E.step(s, 1);
   assert.strictEqual(s.isHungry, true);
   near(E.moral(s), 0.7, 'Moral hungrig');
   near(E.rates(s).scrap, 0.3 * 0.7, 'Schrottsammler gebremst');
   near(E.rates(s).supplies, 0.5 - 0.6, 'Bauer ungebremst');
   E.step(s, 29);
-  assert.strictEqual(s.serfs, 1);
-  assert.deepStrictEqual([s.jobs.scrapper, s.jobs.farmer], [0, 1]);   // Bauern zuletzt
-  assert.match(s.log.at(-1).text, /flieht/);
+  assert.strictEqual(s.serfs, P);                            // P Knechte fliehen auf einmal
+  assert.deepStrictEqual([s.jobs.scrapper, s.jobs.farmer], [0, P]);   // Bauern zuletzt
+  assert.strictEqual(s.log.at(-1).text, `${de(P)} Knechte fliehen in die Wüste. Die Vorräte reichten nicht.`);
 });
 
 test('Hunger: eine satte Pause setzt die Frist zurück', () => {
   const s = fresh();
-  s.serfs = 2;
+  s.serfs = 2 * P;
   E.step(s, 20);
   s.res.supplies = 20; E.step(s, 10);
   s.res.supplies = 0; E.step(s, 20);
-  assert.strictEqual(s.serfs, 2);                            // nie 30 s am Stück hungrig
+  assert.strictEqual(s.serfs, 2 * P);                        // nie 30 s am Stück hungrig
 });
 
 test('Salamanders: Moral +15 %, Knechte fliehen erst nach 60 s', () => {
   const s = fresh('sal');
-  s.serfs = 2; s.jobs.scrapper = 2;
+  s.serfs = 2 * P; s.jobs.scrapper = 2 * P;
   near(E.moral(s), 1.15, 'Beschützer');
   E.step(s, 59);
-  assert.strictEqual(s.serfs, 2);
+  assert.strictEqual(s.serfs, 2 * P);
   E.step(s, 1);
-  assert.strictEqual(s.serfs, 1);
+  assert.strictEqual(s.serfs, P);
 });
 
-test('Moral: Gedränge über 20 Knechte bremst die Jobs', () => {
+test('Moral: Gedränge über 20 × P Knechte bremst die Jobs', () => {
   const s = fresh();
-  s.serfs = 30; s.jobs.scrapper = 1;
-  near(E.moral(s), 0.95, 'Gedränge (30 Knechte): je Knecht über 20 −0,5 %');
+  s.serfs = 30 * P; s.jobs.scrapper = P;
+  near(E.moral(s), 0.95, 'Gedränge (30 P Knechte): je P über 20 P −0,5 %');
   near(E.rates(s).scrap, 0.3 * 0.95, 'Schrott × 0,95');
 });
 
@@ -364,7 +374,7 @@ test('Zeit bis bezahlbar', () => {
   assert.strictEqual(E.eta(s, { supplies: 500 }), Infinity); // Lager zu klein
   assert.strictEqual(E.eta(s, { scrap: 5 }), Infinity);      // kein Ertrag
   const hungry = fresh();
-  hungry.serfs = 2;
+  hungry.serfs = 2 * P;
   assert.strictEqual(E.eta(hungry, { supplies: 10 }), Infinity);
   hungry.res.scrap = 10;
   assert.strictEqual(E.eta(hungry, { scrap: 5 }), 0);
@@ -372,37 +382,37 @@ test('Zeit bis bezahlbar', () => {
 
 test('Speichern und Laden', () => {
   const s = fresh('ws');
-  s.res.supplies = 12.5; s.bld.hydroFarm = 3; s.serfs = 2; s.jobs.scrapper = 1; s.tech.calendar = true; s.seen.serfs = true;
+  s.res.supplies = 12.5; s.bld.hydroFarm = 3; s.serfs = 2 * P; s.jobs.scrapper = P; s.tech.calendar = true; s.seen.serfs = true;
   s.time = 1234.5; s.savedAt = 1790000000000; s.arrival = 7; s.hungry = 12; s.isHungry = true;
   E.honor(s, 'Test-Ehre');
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));   // jedes Feld kommt zurück
-  const old = E.load(JSON.stringify({ v: 1, chapter: 'um', res: { supplies: 5 } }));
+  const old = E.load(JSON.stringify({ v: 2, chapter: 'um', res: { supplies: 5 } }));
   assert.deepStrictEqual([old.res.supplies, old.bld.quarters, old.chapter], [5, 0, 'um']);
   assert.throws(() => E.load('{"hallo":1}'));
   assert.throws(() => E.load(JSON.stringify({ v: 1, chapter: 'orks' })));
   assert.throws(() => E.load('kaputt'));
-  const odd = E.load(JSON.stringify({ v: 1, chapter: 'da', serfs: 1, jobs: { scrapper: 5 }, res: { supplies: 1e9 } }));
+  const odd = E.load(JSON.stringify({ v: 2, chapter: 'da', serfs: 1, jobs: { scrapper: 5 }, res: { supplies: 1e9 } }));
   assert.strictEqual(E.free(odd), 0);
   assert.strictEqual(odd.res.supplies, 200);
-  const huge = E.load(JSON.stringify({ v: 1, chapter: 'da', serfs: 1, jobs: { scrapper: 1e300 } }));   // darf nicht hängen
+  const huge = E.load(JSON.stringify({ v: 2, chapter: 'da', serfs: 1, jobs: { scrapper: 1e300 } }));   // darf nicht hängen
   assert.strictEqual(E.free(huge), 0);
   const long = fresh();
   for (let i = 0; i < 150; i++) E.log(long, 'Zeile ' + i);
   assert.deepStrictEqual([long.log.length, long.log[0].text], [D.rules.logMax, 'Zeile 50']);   // älteste fallen raus
-  const wild = E.load(JSON.stringify({ v: 1, chapter: 'da', time: 1e300, arrival: 1e9, hungry: 1e9,
+  const wild = E.load(JSON.stringify({ v: 2, chapter: 'da', time: 1e300, arrival: 1e9, hungry: 1e9,
     meta: { honors: [{ date: 1, chapter: 'x', text: 'kaputt' }, { date: 'd', chapter: 'c', text: 't' }] } }));
-  assert.ok(wild.time <= 1e10 && wild.arrival <= D.rules.arrivalEvery && wild.hungry <= D.rules.fleeAfter);
+  assert.ok(wild.time <= 1e10 && wild.arrival <= D.rules.arrivalEvery * P && wild.hungry <= D.rules.fleeAfter);
   assert.deepStrictEqual(wild.meta.honors, [{ date: 'd', chapter: 'c', text: 't' }]);
 });
 
 test('Laden rechnet Lager mit den geladenen Gebäuden', () => {
-  const s = E.load(JSON.stringify({ v: 1, chapter: 'da', bld: { storehouse: 1 }, res: { supplies: 340 } }));
+  const s = E.load(JSON.stringify({ v: 2, chapter: 'da', bld: { storehouse: 1 }, res: { supplies: 340 } }));
   assert.strictEqual(s.res.supplies, 340);                   // 200 + 150 Lager
 });
 
 test('Unbekannte Namen tun nichts', () => {
   const s = fresh();
-  s.res.supplies = s.res.scrap = s.res.knowledge = 50; s.serfs = 1;
+  s.res.supplies = s.res.scrap = s.res.knowledge = 50; s.serfs = P;
   const before = E.save(s);
   for (const id of ['constructor', 'toString', '__proto__', 'nope']) {
     assert.strictEqual(E.build(s, id) || E.research(s, id) || E.assign(s, id, 1) || E.click(s, id)
@@ -439,10 +449,10 @@ test('Offline: simulate wie viele step(1), höchstens 3 Tage', () => {
 test('8 Std. offline: eine gut versorgte Festung übersteht jede Frostzeit', () => {
   const s = fresh();
   s.tech.hydroponics = true; s.seen.serfs = true; s.res.supplies = 200;
-  s.bld.quarters = 5; s.bld.hydroFarm = 10; s.serfs = 6; s.jobs.farmer = 4; s.jobs.scrapper = 2;
+  s.bld.quarters = 5; s.bld.hydroFarm = 10; s.serfs = 6 * P; s.jobs.farmer = 4 * P; s.jobs.scrapper = 2 * P;
   const lines = s.logSeq;
   E.simulate(s, 8 * 3600);
-  assert.deepStrictEqual([s.serfs, s.jobs.farmer, s.jobs.scrapper, s.isHungry], [10, 4, 2, false]);
+  assert.deepStrictEqual([s.serfs, s.jobs.farmer, s.jobs.scrapper, s.isHungry], [10 * P, 4 * P, 2 * P, false]);
   assert.ok(s.logSeq - lines <= 5, `${s.logSeq - lines} neue Log-Zeilen`);
 });
 
@@ -457,7 +467,7 @@ function awake(ch = 'da') {
   return s;
 }
 
-// Bereit zur Implantation: Zellentrakt und Arena stehen, ein Aspirant und eine Gensaat liegen bereit.
+// Bereit zur Implantation: Zellentrakt und Arena stehen, P Aspiranten und P Gensaat liegen bereit (ein Schub).
 // Die fünf Brüder sind weggerechnet, damit keine Gensaat nachreift und der Zufall genau steuerbar bleibt.
 function ready(ch = 'da') {
   const s = awake(ch);
@@ -467,7 +477,7 @@ function ready(ch = 'da') {
   s.bld.hydroFarm = 20;                                      // auch im Frost genug für neue Brüder (Effekte rechnet build neu)
   assert.ok(E.build(s, 'cells') && E.build(s, 'arena'));
   s.marines.brothers = 0;
-  s.res.aspirants = 1; s.res.geneseed = 1;
+  s.res.aspirants = P; s.res.geneseed = P;
   return s;
 }
 
@@ -483,30 +493,30 @@ test('Brüder erwachen mit dem ersten Apothecarion', () => {
   const s = fresh();
   Object.assign(s.tech, { storage: true, salvage: true, susan: true });
   s.res.scrap = 400; s.res.supplies = 250;
-  assert.deepStrictEqual([s.marines.coma, s.marines.brothers], [5, 0]);
+  assert.deepStrictEqual([s.marines.coma, s.marines.brothers], [5 * P, 0]);
   near(E.rates(s).supplies, 0, 'im Koma essen sie nichts');
   assert.ok(E.build(s, 'apothecarion'));
-  assert.deepStrictEqual([s.marines.coma, s.marines.brothers], [0, 5]);
-  assert.match(s.log.at(-1).text, /5 Brüder öffnen die Augen/);
+  assert.deepStrictEqual([s.marines.coma, s.marines.brothers], [0, 5 * P]);
+  assert.ok(s.log.at(-1).text.includes(`${de(5 * P)} Brüder öffnen die Augen`));
   assert.strictEqual(s.meta.honors.at(-1).text, 'Die Brüder erwachen aus dem Sus-an-Koma.');
-  near(E.rates(s).supplies, -5 * 0.4, 'fünf Brüder essen 0,4/s');
+  near(E.rates(s).supplies, -5 * 0.4, '5 P Brüder essen 2/s');
   assert.ok(E.build(s, 'apothecarion'));
-  assert.strictEqual(s.marines.brothers, 5);                 // nur das erste weckt
-  assert.deepStrictEqual([E.marineCap(s), E.marinesUsed(s), E.freeBrothers(s)], [5, 5, 5]);
+  assert.strictEqual(s.marines.brothers, 5 * P);             // nur das erste weckt
+  assert.deepStrictEqual([E.marineCap(s), E.marinesUsed(s), E.freeBrothers(s)], [5 * P, 5 * P, 5 * P]);
 });
 
-test('Aufklärung: Absturzstelle bringt Gensaat und Schrott, der Bruder kommt zurück', () => {
+test('Aufklärung: Absturzstelle bringt Gensaat und Schrott, der Trupp kommt zurück', () => {
   const s = awake();
-  s.res.scrap = 0; s.res.geneseed = 3;
+  s.res.scrap = 0; s.res.geneseed = 3 * P;
   assert.strictEqual(E.placeState(s, 'crashsite'), 'open');
   assert.ok(E.scout(s, 'crashsite'));
   assert.strictEqual(E.scout(s, 'crashsite'), false);        // schon unterwegs
-  assert.deepStrictEqual([E.placeState(s, 'crashsite'), E.freeBrothers(s)], ['away', 4]);
+  assert.deepStrictEqual([E.placeState(s, 'crashsite'), E.freeBrothers(s)], ['away', 4 * P]);   // ein Trupp aus P
   E.step(s, 59);
   assert.strictEqual(E.placeState(s, 'crashsite'), 'away');
   E.step(s, 1);
-  assert.deepStrictEqual([E.placeState(s, 'crashsite'), E.freeBrothers(s)], ['done', 5]);
-  near(s.res.geneseed, 6, 'Gensaat aus der Kammer, Lager 3 + 3 gedeckelt');
+  assert.deepStrictEqual([E.placeState(s, 'crashsite'), E.freeBrothers(s)], ['done', 5 * P]);
+  near(s.res.geneseed, 6 * P, 'Gensaat aus der Kammer, Lager 3 P + 3 P gedeckelt');
   near(s.res.scrap, 40, 'Schrott aus dem Wrack');
   assert.strictEqual(E.scout(s, 'crashsite'), false);        // schon entdeckt
   assert.match(s.log.at(-1).text, /Absturzstelle entdeckt/);
@@ -557,47 +567,45 @@ test('Prüfungsarena: Aspiranten kommen langsam, Lager 2 je Arena, sie essen 0,3
   const s = awake();
   s.tech.trials = true; s.res.scrap = 200; s.res.ore = 100; s.res.supplies = 200;
   assert.ok(E.build(s, 'arena'));
-  near(E.rates(s).aspirants, 0.001, 'Aspiranten je Sekunde');
-  near(E.cap(s, 'aspirants'), 2, 'Lager 2');
-  s.res.aspirants = 1;
-  near(E.rates(s).supplies, -5 * 0.4 - 0.3, 'Brüder und ein Aspirant essen');
+  near(E.rates(s).aspirants, 0.001 * P, 'Aspiranten je Sekunde');
+  near(E.cap(s, 'aspirants'), 2 * P, 'Lager 2 P');
+  s.res.aspirants = P;
+  near(E.rates(s).supplies, -5 * 0.4 - 0.3, 'Brüder und P Aspiranten essen');
   const um = awake('um');
   um.tech.trials = true; um.res.scrap = 200; um.res.ore = 100;
   assert.ok(E.build(um, 'arena'));
-  near(E.cap(um, 'aspirants'), 2, 'Ultramarines: kein Lagerbonus auf Aspiranten');
+  near(E.cap(um, 'aspirants'), 2 * P, 'Ultramarines: kein Lagerbonus auf Aspiranten');
 });
 
-test('Implantation: Erfolg ergibt einen Neophyten, nach 900 s einen Kampfbruder', () => {
+test('Implantation: ein Schub aus P, Erfolg ergibt Neophyten, nach 900 s Kampfbrüder', () => {
   const s = ready();
-  withRng([0.1], () => {
+  withRng(fill(P, 0.1), () => {
     E.step(s, 1);
-    assert.deepStrictEqual([s.marines.implants.length, s.res.aspirants < 1, s.res.geneseed < 1], [1, true, true]);
+    assert.deepStrictEqual([s.marines.implants, s.res.aspirants < 1, s.res.geneseed < 1], [[{ n: P, left: 300 }], true, true]);
     E.step(s, 300);
   });
-  assert.deepStrictEqual([s.marines.implants.length, s.marines.neophytes.length], [0, 1]);
-  assert.match(s.log.at(-1).text, /übersteht die Implantate/);
-  assert.ok(s.meta.honors.some(h => h.text === 'Erster eigener Neophyt.'));
+  assert.deepStrictEqual([s.marines.implants.length, s.marines.neophytes], [0, [{ n: P, left: 899 }]]);   // ein Tick läuft schon
+  assert.strictEqual(s.log.at(-1).text, `Implantation: ${de(P)} Neophyten.`);
+  assert.ok(s.meta.honors.some(h => h.text === 'Die ersten eigenen Neophyten.'));
   E.step(s, 900);
-  assert.deepStrictEqual([s.marines.neophytes.length, s.marines.brothers], [0, 1]);
-  assert.match(s.log.at(-1).text, /Kampfbruder/);
+  assert.deepStrictEqual([s.marines.neophytes.length, s.marines.brothers], [0, P]);
+  assert.strictEqual(s.log.at(-1).text, `${de(P)} Neophyten legen die Servorüstung an. Neue Kampfbrüder.`);
 });
 
 test('Implantation: Fehlschlag ergibt Servitor oder Tod, bei Space Wolves auch Wulfen', () => {
   const outcome = (ch, rolls) => {
     const s = ready(ch);
     withRng(rolls, () => E.step(s, 301));
-    return [s.marines.neophytes.length, s.marines.servitors, s.marines.wulfen, s.log.at(-1).text];
+    return [heads(s.marines.neophytes), s.marines.servitors, s.marines.wulfen, s.log.at(-1).text];
   };
-  const servitor = outcome('da', [0.9, 0.2]);                // Fehlschlag, dann Servitor
-  assert.deepStrictEqual(servitor.slice(0, 3), [0, 1, 0]);
-  assert.match(servitor[3], /Servitor/);
-  const dead = outcome('da', [0.9, 0.7]);                    // Fehlschlag, dann Tod
-  assert.deepStrictEqual(dead.slice(0, 3), [0, 0, 0]);
-  assert.match(dead[3], /stirbt/);
-  const wulf = outcome('sw', [0.7, 0.3]);                    // Space Wolves: 0,7 ≥ 65 %, dann Wulf
-  assert.deepStrictEqual(wulf.slice(0, 3), [0, 0, 1]);
-  assert.match(wulf[3], /Wulf/);
-  assert.strictEqual(outcome('da', [0.7])[0], 1);            // 0,7 < 75 %: Erfolg
+  const servitor = outcome('da', [...fill(P, 0.9), ...fill(P, 0.2)]);   // alle scheitern, dann Servitoren
+  assert.deepStrictEqual(servitor, [0, P, 0, `Implantation: 0 Neophyten, ${de(P)} Servitoren.`]);
+  const dead = outcome('da', [...fill(P, 0.9), ...fill(P, 0.7)]);       // alle scheitern, dann Tod
+  assert.deepStrictEqual(dead, [0, 0, 0, `Implantation: 0 Neophyten, ${de(P)} tot.`]);
+  const wulf = outcome('sw', [...fill(P, 0.7), ...fill(P, 0.3)]);       // Space Wolves: 0,7 ≥ 65 %, dann Wulfen
+  assert.deepStrictEqual(wulf, [0, 0, P, `Implantation: 0 Neophyten, ${de(P)} Wulfen.`]);
+  const mixed = outcome('da', [...fill(P / 2, 0.7), ...fill(P / 2, 0.9), ...fill(P / 4, 0.2), ...fill(P / 4, 0.7)]);
+  assert.deepStrictEqual(mixed.slice(0, 3), [P / 2, P / 4, 0]);         // je Kopf gewürfelt, Summe = P
 });
 
 test('Implantation braucht Lehre, Aspirant, Gensaat, Implantationsplatz und Brüder-Platz', () => {
@@ -606,21 +614,23 @@ test('Implantation braucht Lehre, Aspirant, Gensaat, Implantationsplatz und Brü
   assert.strictEqual(E.implantBlock(s), 'lore');
   s.tech.geneseedlore = true;
   assert.strictEqual(E.implantBlock(s), null);
-  s.res.aspirants = 0.9;
-  assert.strictEqual(E.implantBlock(s), 'aspirant');
-  s.res.aspirants = 1; s.res.geneseed = 0.5;
+  s.res.aspirants = P - 1;
+  assert.strictEqual(E.implantBlock(s), 'aspirant');         // ein Schub braucht P
+  s.res.aspirants = P; s.res.geneseed = P / 2;
   assert.strictEqual(E.implantBlock(s), 'geneseed');
-  s.res.geneseed = 2; s.marines.implants = [100];
+  s.res.geneseed = 2 * P; s.marines.implants = [{ n: P, left: 100 }];
   assert.strictEqual(E.implantBlock(s), 'slot');             // ein Apothecarion = ein Platz
-  s.marines.implants = []; s.marines.brothers = 10;          // Wrack 5 + Zellentrakt 5 voll
+  s.marines.implants = []; s.marines.brothers = 9 * P + 1;   // Wrack 5 P + Zellentrakt 5 P: kein Platz mehr für P
   assert.strictEqual(E.implantBlock(s), 'cells');
+  s.marines.brothers = 9 * P;
+  assert.strictEqual(E.implantBlock(s), null);
 });
 
 test('Implantation wartet, solange die Vorräte auch im Frost keinen weiteren Bruder ernähren', () => {
   const s = ready();
-  s.marines.brothers = 3; s.bld.hydroFarm = 0; s._eff = null; // essen 1,2/s, keine Farm
+  s.marines.brothers = 3 * P; s.bld.hydroFarm = 0; s._eff = null; // essen 1,2/s, keine Farm
   assert.strictEqual(E.implantBlock(s), 'food');
-  s.bld.hydroFarm = 7; s._eff = null;                        // Frost: 7 × 0,5 × 0,5 = 1,75 − 1,2 − 0,3 = 0,25 < 0,4
+  s.bld.hydroFarm = 7; s._eff = null;                        // Frost: 7 × 0,5 × 0,5 = 1,75 − 1,2 − 0,3 = 0,25 < 0,4 (P Brüder)
   assert.strictEqual(E.implantBlock(s), 'food');
   near(E.leanFood(s), 0.25, 'Überschuss im Frost');
   s.bld.hydroFarm = 8; s._eff = null;                        // 2 − 1,5 = 0,5 ≥ 0,4
@@ -629,24 +639,24 @@ test('Implantation wartet, solange die Vorräte auch im Frost keinen weiteren Br
 
 test('Apothecarius macht Implantationen schneller und sicherer, Übungskäfige die Ausbildung', () => {
   const s = ready();
-  s.marines.brothers = 2;
-  assert.ok(E.setOffice(s, 'apothecary', 1));
-  withRng([0.8], () => E.step(s, 1 + 240));                  // 300 s × 0,8 = 240 s; 0,8 < 85 %: Erfolg
-  assert.deepStrictEqual([s.marines.implants.length, s.marines.neophytes.length], [0, 1]);
+  s.marines.brothers = 2 * P;
+  assert.ok(E.setOffice(s, 'apothecary', P));
+  withRng(fill(P, 0.8), () => E.step(s, 1 + 240));          // 300 s × 0,8 = 240 s; 0,8 < 85 %: alle Erfolg
+  assert.deepStrictEqual([s.marines.implants.length, heads(s.marines.neophytes)], [0, P]);
   s.tech.drill = true; s.res.ore = 1000; s.res.scrap = 1000;
   for (let i = 0; i < 6; i++) assert.ok(E.build(s, 'cages'), `Käfig ${i + 1}`);
   E.step(s, 450);                                            // höchstens −50 %: 900 s × 0,5
-  assert.deepStrictEqual([s.marines.neophytes.length, s.marines.brothers], [0, 3]);
+  assert.deepStrictEqual([s.marines.neophytes.length, s.marines.brothers], [0, 3 * P]);
 });
 
 test('Gensaat reift in Kampfbrüdern, bei Salamanders langsamer', () => {
-  near(E.rates(awake()).geneseed, 5 * 0.0005, 'fünf Brüder');
-  near(E.rates(awake('sal')).geneseed, 5 * 0.0005 * 0.75, 'Salamanders −25 %');
+  near(E.rates(awake()).geneseed, 5 * P * 0.0005, '5 P Brüder');
+  near(E.rates(awake('sal')).geneseed, 5 * P * 0.0005 * 0.75, 'Salamanders −25 %');
 });
 
 test('Servitoren sammeln Schrott und essen nichts', () => {
   const s = fresh();
-  s.marines.servitors = 2;
+  s.marines.servitors = 2 * P;
   near(E.rates(s).scrap, 2 * 0.15, 'Schrott');
   near(E.rates(s).supplies, 0, 'essen nichts');
 });
@@ -655,12 +665,12 @@ test('Ämter: nur mit freien Brüdern; Scriptor bringt Wissen; Runenpriester bei
   const s = awake();
   assert.strictEqual(E.setOffice(s, 'scriptor', 1), false);  // Librarius fehlt
   s.tech.librarius = true;
-  for (let i = 0; i < 5; i++) assert.ok(E.setOffice(s, 'scriptor', 1));
+  for (let i = 0; i < 5; i++) assert.ok(E.setOffice(s, 'scriptor', P));
   assert.strictEqual(E.setOffice(s, 'scriptor', 1), false);  // keiner mehr frei
   assert.strictEqual(E.freeBrothers(s), 0);
   assert.strictEqual(E.scout(s, 'crashsite'), false);
-  near(E.rates(s).knowledge, 5 * 0.5, 'fünf Scriptoren');
-  assert.ok(E.setOffice(s, 'scriptor', -1));
+  near(E.rates(s).knowledge, 5 * 0.5, '5 P Scriptoren');
+  assert.ok(E.setOffice(s, 'scriptor', -P));
   assert.strictEqual(E.setOffice(s, 'scriptor', 0), false);
   assert.strictEqual(E.officeName(awake('sw'), 'scriptor'), 'Runenpriester');
   assert.strictEqual(E.officeName(s, 'scriptor'), 'Scriptor');
@@ -668,72 +678,75 @@ test('Ämter: nur mit freien Brüdern; Scriptor bringt Wissen; Runenpriester bei
 
 test('Speichern und Laden mit Marines, Import-Schutz', () => {
   const s = ready();
-  Object.assign(s.marines, { neophytes: [400.5], implants: [12], servitors: 2, wulfen: 1, brothers: 4 });
-  s.offices.apothecary = 1; s.scouts = [{ place: 'crashsite', left: 30 }];
+  Object.assign(s.marines, { neophytes: [{ n: P, left: 400.5 }], implants: [{ n: P, left: 12 }], servitors: 2 * P, wulfen: P,
+    brothers: 4 * P });
+  s.offices.apothecary = P; s.scouts = [{ place: 'crashsite', left: 30 }];
   s.res.scrap = 100;                                         // unter dem Lager, sonst deckelt das Laden
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
-  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da',
-    marines: { coma: 2, brothers: 3, neophytes: [5, 'x', -1, 1e9], implants: 'kaputt', servitors: -4 },
-    offices: { apothecary: 9, scriptor: 1 },
+  const bad = E.load(JSON.stringify({ v: 2, chapter: 'da',
+    marines: { coma: 2 * P, brothers: 3 * P, neophytes: [{ n: P, left: 5 }, 'x', { n: -1, left: 5 }, { n: P, left: 1e9 }, { n: 0, left: 1 }],
+      implants: 'kaputt', servitors: -4 },
+    offices: { apothecary: 9 * P, scriptor: P },
     scouts: [{ place: 'nope', left: 5 }, { place: 'orevein', left: 1e12 }, { place: 'orevein', left: 3 }],
     places: { crashsite: true, nope: true } }));
-  assert.deepStrictEqual(bad.marines, { coma: 2, brothers: 3, neophytes: [5, 900], implants: [], servitors: 0, wulfen: 0 });
+  assert.deepStrictEqual(bad.marines, { coma: 2 * P, brothers: 3 * P, neophytes: [{ n: P, left: 5 }, { n: P, left: 900 }],
+    implants: [], servitors: 0, wulfen: 0 });
   assert.deepStrictEqual(bad.scouts, [{ place: 'orevein', left: 225 }]);
-  assert.deepStrictEqual(bad.offices, { apothecary: 2, scriptor: 0, priest: 0, techmarine: 0 });   // 3 Brüder − 1 unterwegs
+  assert.deepStrictEqual(bad.offices, { apothecary: 2 * P, scriptor: 0, priest: 0, techmarine: 0 });   // 3 P − P unterwegs
   assert.deepStrictEqual(bad.places, { crashsite: true });
 });
 
 // ---------- Etappe 3: Kampf ----------
 
-// Kampfbereit: Kampfdoktrin und Waffenkunde, Aschewüste entdeckt, zehn freie Brüder.
+// Kampfbereit: Kampfdoktrin und Waffenkunde, Aschewüste entdeckt, 10 P freie Brüder.
 function armed(ch = 'da') {
   const s = awake(ch);
   Object.assign(s.tech, { geneseedlore: true, drill: true, doctrine: true, weaponlore: true });
   Object.assign(s.places, { crashsite: true, orevein: true, tribes: true, ashwaste: true });
   s._eff = null;                                             // Orte geändert: Effekte neu rechnen
-  s.marines.brothers = 10;
+  s.marines.brothers = 10 * P;
   s.res.supplies = 200;
   return s;
 }
 
 test('Kampf: Chance aus Stärke und Bedrohung, Kampfkraft mit Boni', () => {
   const s = armed();
-  near(E.power(s, 3, 0), 30, 'drei Brüder');
-  near(E.power(s, 1, 1), 30, 'ein Bruder und ein Wulf');
-  near(E.chance(s, 'raiders', 3), 0.5, 'r = 1');
-  near(E.chance(s, 'raiders', 6), 0.9, 'r = 2');
-  near(E.chance(s, 'groxhunt', 1), 0.1, 'r = 0,5');
-  near(E.chance(s, 'groxhunt', 10), 0.95, 'höchstens 95 %');
-  near(E.chance(s, 'orkcamp', 1), 0.05, 'mindestens 5 %');
-  near(E.power(armed('ba'), 3, 0), 36, 'Blood Angels +20 %');
+  near(E.power(s, 3 * P, 0), 30, '3 P Brüder');
+  near(E.power(s, P, P), 30, 'P Brüder und P Wulfen');
+  near(E.chance(s, 'raiders', 3 * P), 0.5, 'r = 1');
+  near(E.chance(s, 'raiders', 6 * P), 0.9, 'r = 2');
+  near(E.chance(s, 'groxhunt', P), 0.1, 'r = 0,5');
+  near(E.chance(s, 'groxhunt', 10 * P), 0.95, 'höchstens 95 %');
+  near(E.chance(s, 'orkcamp', P), 0.05, 'mindestens 5 %');
+  near(E.power(armed('ba'), 3 * P, 0), 36, 'Blood Angels +20 %');
 });
 
 test('Entsenden: Lehre und Ort nötig, Truppgröße im Rahmen, Wulfen zuerst, je Einsatz ein Trupp', () => {
   const s = armed();
-  assert.strictEqual(E.sendMission(s, 'raiders', 2), false);   // zu klein
-  assert.strictEqual(E.sendMission(s, 'raiders', 6), false);   // zu groß
-  assert.strictEqual(E.sendMission(s, 'nope', 3), false);
-  s.marines.wulfen = 1;
-  assert.ok(E.sendMission(s, 'raiders', 3));
-  assert.deepStrictEqual(s.missions[0], { id: 'raiders', brothers: 2, wulfen: 1, left: 240 });
-  assert.strictEqual(E.sendMission(s, 'raiders', 3), false);   // schon unterwegs
-  assert.deepStrictEqual([E.freeBrothers(s), E.freeWulfen(s)], [8, 0]);
-  assert.ok(E.sendMission(s, 'groxhunt', 3));
-  assert.strictEqual(E.freeBrothers(s), 5);
+  assert.strictEqual(E.sendMission(s, 'raiders', 3 * P - 1), false);   // zu klein
+  assert.strictEqual(E.sendMission(s, 'raiders', 5 * P + 1), false);   // zu groß
+  assert.strictEqual(E.sendMission(s, 'nope', 3 * P), false);
+  s.marines.wulfen = P;
+  assert.ok(E.sendMission(s, 'raiders', 3 * P));
+  assert.deepStrictEqual(s.missions[0], { id: 'raiders', brothers: 2 * P, wulfen: P, left: 240 });
+  assert.strictEqual(E.sendMission(s, 'raiders', 3 * P), false);   // schon unterwegs
+  assert.deepStrictEqual([E.freeBrothers(s), E.freeWulfen(s)], [8 * P, 0]);
+  assert.ok(E.sendMission(s, 'groxhunt', 3 * P));
+  assert.strictEqual(E.freeBrothers(s), 5 * P);
   const locked = awake();
-  locked.marines.brothers = 10;
-  assert.strictEqual(E.sendMission(locked, 'groxhunt', 2), false);   // Kampfdoktrin fehlt
+  locked.marines.brothers = 10 * P;
+  assert.strictEqual(E.sendMission(locked, 'groxhunt', 2 * P), false);   // Kampfdoktrin fehlt
   const few = armed();
-  few.marines.brothers = 2;
-  assert.strictEqual(E.sendMission(few, 'raiders', 3), false);         // zu wenig freie Kämpfer
+  few.marines.brothers = 2 * P;
+  assert.strictEqual(E.sendMission(few, 'raiders', 3 * P), false);         // zu wenig freie Kämpfer
 });
 
 test('Einsatz gewonnen: Beute, Ruhm, weniger Bedrohung, alle kommen zurück', () => {
   const s = armed();
   s.threat = 50;
-  assert.ok(E.sendMission(s, 'raiders', 5));                          // r = 50/30: Chance ≈ 79 %
-  withRng([0.1, 0.9, 0.9, 0.9, 0.9, 0.9], () => E.step(s, 240));      // Sieg, niemand fällt
-  assert.deepStrictEqual([s.missions.length, E.freeBrothers(s), s.marines.brothers], [0, 10, 10]);
+  assert.ok(E.sendMission(s, 'raiders', 5 * P));                      // r = 50/30: Chance ≈ 79 %
+  withRng([0.1, ...fill(5 * P, 0.9)], () => E.step(s, 240));          // Sieg, niemand fällt
+  assert.deepStrictEqual([s.missions.length, E.freeBrothers(s), s.marines.brothers], [0, 10 * P, 10 * P]);
   near(s.res.scrap, 50 + 60, 'Schrott');
   near(s.res.renown, 5, 'Ruhm');
   near(s.threat, 50 + 240 * 0.01 - 10, 'Bedrohung sinkt');
@@ -743,44 +756,44 @@ test('Einsatz gewonnen: Beute, Ruhm, weniger Bedrohung, alle kommen zurück', ()
 
 test('Verluste: Gensaat-Bergung mit Apothecarius; Fehlschlag ohne Beute', () => {
   const s = armed();
-  assert.ok(E.setOffice(s, 'apothecary', 1));
+  assert.ok(E.setOffice(s, 'apothecary', P));
   const scrap = s.res.scrap;
-  assert.ok(E.sendMission(s, 'orkcamp', 5));                          // r = 50/120: Chance 5 %
-  // Niederlage; Bruder 1 fällt (Gensaat geborgen, 60 %), Bruder 3 fällt (nicht geborgen)
-  withRng([0.5, 0.1, 0.3, 0.9, 0.2, 0.7, 0.9, 0.9], () => E.step(s, 1200));
-  assert.strictEqual(s.marines.brothers, 8);
+  assert.ok(E.sendMission(s, 'orkcamp', 5 * P));                      // r = 50/120: Chance 5 %
+  // Niederlage (Verlust 50 %): P fallen, 4 P überleben; Bergung 60 %: die Hälfte der Gefallenen
+  withRng([0.5, ...fill(P, 0.1), ...fill(4 * P, 0.9), ...fill(P / 2, 0.3), ...fill(P / 2, 0.7)], () => E.step(s, 1200));
+  assert.strictEqual(s.marines.brothers, 9 * P);
   near(s.res.scrap, scrap, 'keine Beute');
   const lines = s.log.slice(-2).map(l => l.text);
   assert.match(lines[0], /^Rückzug: Ork-Lager zerschlagen/);
-  assert.match(lines[1], /^Gefallen: .* Gensaat geborgen: 1\.$/);
-  assert.ok(s.meta.honors.some(h => h.text.startsWith('Der erste Bruder fällt:')));
+  assert.strictEqual(lines[1], `Gefallen: ${de(P)} Brüder. Gensaat geborgen: ${de(P / 2)}.`);
+  assert.ok(s.meta.honors.some(h => h.text === 'Die ersten Brüder fallen im Kampf.'));
 });
 
 test('Beute: Space Wolves +25 %, Dark Angels Archäotech +50 %', () => {
   const sw = armed('sw');
-  assert.ok(E.sendMission(sw, 'groxhunt', 3));
-  withRng([0.1, 0.9, 0.9, 0.9], () => E.step(sw, 300));
+  assert.ok(E.sendMission(sw, 'groxhunt', 3 * P));
+  withRng([0.1, ...fill(3 * P, 0.9)], () => E.step(sw, 300));
   near(sw.res.grox, 12.5, 'Grox × 1,25');
   const da = armed('da');
-  assert.ok(E.sendMission(da, 'wreckfields', 5));
-  withRng([0.1, 0.05, 0.9, 0.9, 0.9, 0.9, 0.9], () => E.step(da, 600));   // Sieg, Glücksfund, niemand fällt
+  assert.ok(E.sendMission(da, 'wreckfields', 5 * P));
+  withRng([0.1, 0.05, ...fill(5 * P, 0.9)], () => E.step(da, 600));   // Sieg, Glücksfund, niemand fällt
   near(da.res.archeotech, 1.5, 'Archäotech × 1,5');
   assert.ok(E.isUnlocked(da, byId(D.resources, 'archeotech')));
 });
 
 test('Einsatzbefehl: der Trupp zieht nach der Rückkehr wieder los; ohne Einsatzplanung nur White Scars', () => {
   const s = armed();
-  assert.strictEqual(E.setOrder(s, 'groxhunt', 2), false);            // Einsatzplanung fehlt
+  assert.strictEqual(E.setOrder(s, 'groxhunt', 2 * P), false);        // Einsatzplanung fehlt
   s.tech.planning = true;
-  assert.strictEqual(E.setOrder(s, 'groxhunt', 9), false);            // Truppgröße außerhalb des Rahmens
-  assert.ok(E.setOrder(s, 'groxhunt', 2));
+  assert.strictEqual(E.setOrder(s, 'groxhunt', 9 * P), false);        // Truppgröße außerhalb des Rahmens
+  assert.ok(E.setOrder(s, 'groxhunt', 2 * P));
   E.step(s, 1);                                                       // der Befehl schickt den Trupp gleich los
   assert.strictEqual(s.missions.length, 1);
-  withRng([0.1, 0.9, 0.9], () => E.step(s, 300));
+  withRng([0.1, ...fill(2 * P, 0.9)], () => E.step(s, 300));
   assert.strictEqual(s.missions.length, 1);                           // nach der Rückkehr wieder unterwegs
   assert.ok(E.setOrder(s, 'groxhunt', 0));                            // Befehl aufheben
   assert.deepStrictEqual(s.orders, {});
-  assert.ok(E.setOrder(armed('ws'), 'groxhunt', 2));                  // White Scars ab Start
+  assert.ok(E.setOrder(armed('ws'), 'groxhunt', 2 * P));              // White Scars ab Start
 });
 
 test('Bedrohung wächst ab der Aschewüste; Überfall alle 300 s, wenn sie die Verteidigung übersteigt', () => {
@@ -797,17 +810,17 @@ test('Bedrohung wächst ab der Aschewüste; Überfall alle 300 s, wenn sie die V
   near(s.res.supplies, 90, 'Vorräte −10 %');
   assert.match(s.log.at(-1).text, /^Ork-Überfall!/);
   const t = armed();
-  t.marines.brothers = 0; t.serfs = 2; t.bld.hydroFarm = 20; t._eff = null; t.threat = 100;
+  t.marines.brothers = 0; t.serfs = 2 * P; t.bld.hydroFarm = 20; t._eff = null; t.threat = 100;
   withRng([0.1], () => E.step(t, 300));
-  assert.strictEqual(t.serfs, 1);
+  assert.strictEqual(t.serfs, P);                                     // P Knechte verschleppt
   assert.match(t.log.at(-1).text, /verschleppt/);
   const d = armed();
-  near(E.defense(d), 100, 'zehn Brüder daheim');
+  near(E.defense(d), 100, '10 P Brüder daheim');
   d.tech.fortify = true; d.res.ore = 500; d.res.scrap = 500;
   assert.ok(E.build(d, 'bastion'));
   near(E.defense(d), 120, 'Bastion +20');
   d.tech.librarius = true;
-  assert.ok(E.setOffice(d, 'scriptor', 1));
+  assert.ok(E.setOffice(d, 'scriptor', P));
   near(E.defense(d), 115, 'Amtsträger zählen halb');
   const o = armed();
   o.marines.brothers = 0; o.threat = 400; o.res.scrap = 100;
@@ -817,9 +830,9 @@ test('Bedrohung wächst ab der Aschewüste; Überfall alle 300 s, wenn sie die V
 
 test('Grox-Fleisch hebt die Moral und wird gegessen; Archivum vergrößert das Wissen-Lager prozentual', () => {
   const s = fresh();
-  s.serfs = 10; s.bld.hydroFarm = 10; s.res.grox = 1; s.res.supplies = 200;
+  s.serfs = 10 * P; s.bld.hydroFarm = 10; s.res.grox = 1; s.res.supplies = 200;
   near(E.moral(s), 1.1, 'Luxus +10 %');
-  near(E.rates(s).grox, -0.01, '10 Knechte essen 0,001/s');
+  near(E.rates(s).grox, -0.01, '10 P Knechte essen 0,001/s je P');
   E.step(s, 100);
   near(s.res.grox, 0, 'aufgegessen');
   near(E.moral(s), 1, 'ohne Grox');
@@ -832,16 +845,16 @@ test('Grox-Fleisch hebt die Moral und wird gegessen; Archivum vergrößert das W
 test('Speichern und Laden mit Einsätzen, Befehlen und Bedrohung', () => {
   const s = armed();
   s.tech.planning = true;
-  assert.ok(E.sendMission(s, 'raiders', 4));
-  assert.ok(E.setOrder(s, 'groxhunt', 2));
+  assert.ok(E.sendMission(s, 'raiders', 4 * P));
+  assert.ok(E.setOrder(s, 'groxhunt', 2 * P));
   s.threat = 123.4; s.raidTimer = 77;
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
-  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', marines: { brothers: 3 },
-    missions: [{ id: 'raiders', brothers: 5, wulfen: 0, left: 10 }, { id: 'nope', brothers: 1, wulfen: 0, left: 5 },
-      { id: 'groxhunt', brothers: 2, wulfen: 3, left: 1e9 }, { id: 'groxhunt', brothers: 2, wulfen: 0, left: 1e9 }],
-    orders: { raiders: 4, nope: 2, groxhunt: 99 }, threat: 1e9, raidTimer: -5 }));
-  assert.deepStrictEqual(bad.missions, [{ id: 'groxhunt', brothers: 2, wulfen: 0, left: 375 }]);
-  assert.deepStrictEqual(bad.orders, { raiders: 4 });
+  const bad = E.load(JSON.stringify({ v: 2, chapter: 'da', marines: { brothers: 3 * P },
+    missions: [{ id: 'raiders', brothers: 5 * P, wulfen: 0, left: 10 }, { id: 'nope', brothers: P, wulfen: 0, left: 5 },
+      { id: 'groxhunt', brothers: 2 * P, wulfen: 3 * P, left: 1e9 }, { id: 'groxhunt', brothers: 2 * P, wulfen: 0, left: 1e9 }],
+    orders: { raiders: 4 * P, nope: 2 * P, groxhunt: 99 * P }, threat: 1e9, raidTimer: -5 }));
+  assert.deepStrictEqual(bad.missions, [{ id: 'groxhunt', brothers: 2 * P, wulfen: 0, left: 375 }]);
+  assert.deepStrictEqual(bad.orders, { raiders: 4 * P });
   assert.deepStrictEqual([bad.threat, bad.raidTimer], [500, 0]);
 });
 
@@ -882,11 +895,11 @@ test('Schmiede: Ausbeute +6 % je Schmiede, „max“, nichts ohne Schmiede oder 
 
 test('Servitoren stellen das gewählte Rezept aus Überschuss her und sammeln dann keinen Schrott mehr', () => {
   const s = forged();
-  s.marines.servitors = 5; s.res.scrap = 150;
-  near(E.rates(s).scrap, 0.75, 'ohne Rezept: 5 × 0,15 Schrott');
+  s.marines.servitors = 5 * P; s.res.scrap = 150;
+  near(E.rates(s).scrap, 0.75, 'ohne Rezept: 5 P × 0,15 Schrott je P');
   assert.ok(E.setServitorRecipe(s, 'plasteel'));
   near(E.rates(s).scrap, 0, 'mit Rezept kein Schrott');
-  E.step(s, 10);                                            // 5 × 0,02 × 10 s = 1 Ausführung
+  E.step(s, 10);                                            // 5 P × 0,02 je P × 10 s = 1 Ausführung
   near(s.res.plasteel, 1.06, 'ein Plastahl');
   near(s.res.scrap, 100, '50 Schrott verbraucht');
   E.step(s, 10);                                            // Lager unter 90 %: nichts mehr
@@ -903,7 +916,7 @@ test('Verbesserungen: sichtbar mit freigeschalteten Waren, wirken sofort, nur ei
   assert.strictEqual(E.upgradeVisible(early, 'godwyn'), false);
   assert.ok(E.upgradeVisible(early, 'spades'));
   const s = forged();
-  s.bld.scriptorium = 1; s.tech.hydroponics = true; s.serfs = 1; s.jobs.farmer = 1;
+  s.bld.scriptorium = 1; s.tech.hydroponics = true; s.serfs = P; s.jobs.farmer = P;
   const before = E.rates(s).supplies;
   s.res.plasteel = 10; s.res.knowledge = 300;
   assert.ok(E.buyUpgrade(s, 'spades'));
@@ -935,7 +948,7 @@ test('Munitorum-Verwaltung: neue Knechte bekommen die gewählte Aufgabe', () => 
   assert.strictEqual(E.setAutoJob(s, 'nope'), false);
   assert.ok(E.setAutoJob(s, 'farmer'));
   E.step(s, 20);
-  assert.deepStrictEqual([s.serfs, s.jobs.farmer], [1, 1]);
+  assert.deepStrictEqual([s.serfs, s.jobs.farmer], [P, P]);
   assert.ok(E.setAutoJob(s, null));
 });
 
@@ -944,12 +957,12 @@ test('Raffinerie bringt Promethium über Raffineriearbeiter; Hab-Block und Lager
   s.places.promwell = true; s.res.ore = 200; s.res.scrap = 200;
   assert.ok(E.build(s, 'refinery'));
   near(E.cap(s, 'promethium'), 120, 'Lager 60 + 60');
-  s.serfs = 2;
-  assert.ok(E.assign(s, 'refiner', 1));
-  near(E.rates(s).promethium, 0.08, 'ein Raffineriearbeiter');
+  s.serfs = 2 * P;
+  assert.ok(E.assign(s, 'refiner', P));
+  near(E.rates(s).promethium, 0.08, 'P Raffineriearbeiter');
   s.tech.construction = true; s.res.plasteel = 10; s.res.ore = 100;
   assert.ok(E.build(s, 'hab'));
-  assert.strictEqual(E.serfCap(s), 5);
+  assert.strictEqual(E.serfCap(s), 5 * P);
   s.tech.logistics = true; s.res.plasteel = 10; s.res.ceramite = 5;
   assert.ok(E.build(s, 'warehouse'));
   near(E.cap(s, 'supplies'), 500, 'Vorräte 200 + 300');
@@ -958,11 +971,11 @@ test('Raffinerie bringt Promethium über Raffineriearbeiter; Hab-Block und Lager
 test('Aquila-Rüstung senkt Verluste, Narthecium hilft der Gensaat-Bergung', () => {
   const s = armed();
   s.upgrades.aquila = true; s.upgrades.narthecium = true; s._eff = null;
-  assert.ok(E.sendMission(s, 'orkcamp', 5));
+  assert.ok(E.sendMission(s, 'orkcamp', 5 * P));
   // Kraft 50 × 1,15 → r ≈ 0,48; Verlust min(50 %, 0,25 ÷ r) × 0,75 = 37,5 %; Bergung 50 % + 20 % = 70 %
-  withRng([0.9, 0.3, 0.65, 0.4, 0.9, 0.9, 0.9], () => E.step(s, 1200));
-  assert.strictEqual(s.marines.brothers, 9);                // 0,4 überlebt nur dank der Rüstung
-  assert.match(s.log.at(-1).text, /Gensaat geborgen: 1\./); // 0,65 klappt nur dank Narthecium
+  withRng([0.9, ...fill(P, 0.3), ...fill(4 * P, 0.4), ...fill(P, 0.65)], () => E.step(s, 1200));
+  assert.strictEqual(s.marines.brothers, 9 * P);            // 0,4 überlebt nur dank der Rüstung
+  assert.match(s.log.at(-1).text, new RegExp(`Gensaat geborgen: ${de(P)}\\.`)); // 0,65 klappt nur dank Narthecium
 });
 
 test('Speichern und Laden mit Verbesserungen, Rezept, Aufgabe und Servitor-Arbeit', () => {
@@ -971,14 +984,14 @@ test('Speichern und Laden mit Verbesserungen, Rezept, Aufgabe und Servitor-Arbei
   s.upgrades.spades = true; s.servitorRecipe = 'plasteel'; s.autoJob = 'scrapper'; s.craftAcc = 0.4;
   s.res.plasteel = 3.18;
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
-  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', upgrades: { spades: true, nope: true, cranes: 'ja' },
+  const bad = E.load(JSON.stringify({ v: 2, chapter: 'da', upgrades: { spades: true, nope: true, cranes: 'ja' },
     servitorRecipe: 'nope', autoJob: 'nope', craftAcc: 7 }));
   assert.deepStrictEqual([bad.upgrades, bad.servitorRecipe, bad.autoJob, bad.craftAcc], [{ spades: true }, null, null, 1]);
 });
 
 // ---------- Etappe 5: Reclusiam ----------
 
-// Mit Reclusiam: Liturgie erforscht, Schrein und Reclusiam stehen, 20 freie Knechte, genug Farmen.
+// Mit Reclusiam: Liturgie erforscht, Schrein und Reclusiam stehen, 20 P freie Knechte, genug Farmen.
 // Ordens-Ereignisse sind weit weg geschoben, damit der Zufall steuerbar bleibt.
 function devout(ch = 'da') {
   const s = forged(ch);
@@ -986,14 +999,14 @@ function devout(ch = 'da') {
   s.res.scrap = 300; s.res.ore = 200; s.res.ceramite = 20; s.res.faith = 100;
   assert.ok(E.build(s, 'shrine'));
   assert.ok(E.build(s, 'reclusiam'));
-  s.serfs = 20; s.bld.hydroFarm = 60; s._eff = null; s.res.supplies = 200;
+  s.serfs = 20 * P; s.bld.hydroFarm = 60; s._eff = null; s.res.supplies = 200;
   return s;
 }
 
 test('Glaube: Prediger, Ordenspriester, Schrein und Reclusiam, Frostzeit ×1,25', () => {
   const s = devout();
-  assert.ok(E.assign(s, 'preacher', 1) && E.assign(s, 'preacher', 1));
-  assert.ok(E.setOffice(s, 'priest', 1));
+  assert.ok(E.assign(s, 'preacher', P) && E.assign(s, 'preacher', P));
+  assert.ok(E.setOffice(s, 'priest', P));
   near(E.rates(s).faith, (2 * 0.05 * 1.03 + 0.2) * 1.15, 'Glaube mit Schrein +5 % und Reclusiam +10 %, Prediger mit Moral');
   near(E.moral(s), 1 + 2 * 0.005 + 0.02, 'Prediger und Priester heben die Moral');
   s.time = 750;
@@ -1006,7 +1019,7 @@ test('Riten: kaufen, wirken, nur einmal; das Fest des Primarchen öffnet zwei Li
   s.res.faith = 250;
   assert.ok(E.buyRite(s, 'arms'));
   near(s.res.faith, 150, 'Glaube bezahlt');
-  near(E.power(s, 1, 0), 11, 'Kampfkraft +10 %');
+  near(E.power(s, P, 0), 11, 'Kampfkraft +10 %');
   assert.strictEqual(E.buyRite(s, 'arms'), false);          // nur einmal
   assert.strictEqual(E.buyRite(s, 'eternal'), false);       // zu teuer
   assert.strictEqual(E.litanyOpen(s, 'steadfast'), false);
@@ -1017,14 +1030,14 @@ test('Riten: kaufen, wirken, nur einmal; das Fest des Primarchen öffnet zwei Li
 });
 
 test('Litaneien: kosten Glaube je nach Knechten, halten ein Jahr, erneuern sich', () => {
-  const s = devout();                                       // 20 Knechte: 30 + 2 = 32 Glaube
+  const s = devout();                                       // 20 P Knechte: 30 + 2 = 32 Glaube
   s.res.faith = 100;
   assert.strictEqual(E.litanyCost(s), 32);
   assert.ok(E.chooseLitany(s, 'wrath'));
   near(s.res.faith, 68, 'bezahlt');
-  near(E.power(s, 1, 0), 10 * (1 + 0.3 * 1.05), 'Zorn des Imperators, Reclusiam +5 %');
+  near(E.power(s, P, 0), 10 * (1 + 0.3 * 1.05), 'Zorn des Imperators, Reclusiam +5 %');
   s.res.reliquary = 2;
-  near(E.power(s, 1, 0), 10 * (1 + 0.3 * 1.25), 'mit zwei Reliquiaren +20 %');
+  near(E.power(s, P, 0), 10 * (1 + 0.3 * 1.25), 'mit zwei Reliquiaren +20 %');
   s.res.reliquary = 0;
   E.step(s, 999);
   assert.strictEqual(s.litany, 'wrath');
@@ -1046,43 +1059,43 @@ test('Große Messe: Frömmigkeit aus dem ganzen Glauben, Produktion + √Frömmi
   assert.ok(E.grandMass(s));
   assert.deepStrictEqual([s.res.faith, s.piety], [0, 10000]);
   near(E.productionBonus(s), 0.1, '√10.000 ÷ 10 % = 10 %');
-  s.jobs.scrapper = 1;
+  s.jobs.scrapper = P;
   near(E.rates(s).scrap, 0.3 * 1.1, 'Schrott × 1,1');
 });
 
-test('Kompanien: je 100 Kampfbrüder +5 % Produktion, Ultramarines doppelt, Liber Honoris', () => {
+test('Kompanien: je 100 P Kampfbrüder +5 % Produktion, Ultramarines doppelt, Liber Honoris', () => {
   const s = armed();
-  s.marines.brothers = 250;
+  s.marines.brothers = 250 * P;
   near(E.productionBonus(s), 0.1, 'zwei volle Kompanien');
   E.step(s, 1);
   assert.ok(s.meta.honors.some(h => h.text === 'Die 2. Kompanie ist vollständig.'));
   const um = armed('um');
-  um.marines.brothers = 100;
+  um.marines.brothers = 100 * P;
   near(E.productionBonus(um), 0.1, 'Ultramarines: 10 % je Kompanie');
 });
 
 test('Blood Angels: Roter Durst, Schwarzer Zorn und Todeskompanie', () => {
   const s = armed('ba');
   s.thirst = 97;
-  assert.ok(E.sendMission(s, 'groxhunt', 2));
-  withRng([0.1, 0.9, 0.9], () => E.step(s, 300));           // Sieg, Durst +5: Schwarzer Zorn
-  assert.deepStrictEqual([s.deathCompany, s.thirst, s.marines.brothers], [1, 50, 9]);
+  assert.ok(E.sendMission(s, 'groxhunt', 2 * P));
+  withRng([0.1, ...fill(2 * P, 0.9)], () => E.step(s, 300));   // Sieg, Durst +5: Schwarzer Zorn
+  assert.deepStrictEqual([s.deathCompany, s.thirst, s.marines.brothers], [P, 50, 9 * P]);
   assert.match(s.log.at(-1).text, /Schwarzer Zorn/);
-  assert.ok(E.sendMission(s, 'groxhunt', 2));
-  assert.strictEqual(s.missions[0].dc, 1);
-  withRng([0.1, 0.9, 0.9], () => E.step(s, s.missions[0].left)); // Sturmzeit: dauert länger
-  assert.deepStrictEqual([s.deathCompany, s.marines.brothers], [0, 9]);
+  assert.ok(E.sendMission(s, 'groxhunt', 2 * P));
+  assert.strictEqual(s.missions[0].dc, P);
+  withRng([0.1, ...fill(2 * P, 0.9)], () => E.step(s, s.missions[0].left)); // Sturmzeit: dauert länger
+  assert.deepStrictEqual([s.deathCompany, s.marines.brothers], [0, 9 * P]);
   assert.match(s.log.at(-1).text, /Todeskompanie fällt/);
   const p = armed('ba');
   p.tech.liturgy = true; p.eventIn = 1e9; p.thirst = 10;
-  assert.ok(E.setOffice(p, 'priest', 1));
+  assert.ok(E.setOffice(p, 'priest', P));
   E.step(p, 100);
-  near(p.thirst, 9, '−0,01/s je Sanguinischem Priester');
+  near(p.thirst, 9, '−0,01/s je P Sanguinische Priester');
   assert.strictEqual(E.officeName(p, 'priest'), 'Sanguinischer Priester');
   const da = armed();
   da.thirst = 99;
-  assert.ok(E.sendMission(da, 'groxhunt', 2));
-  withRng([0.1, 0.9, 0.9], () => E.step(da, 300));
+  assert.ok(E.sendMission(da, 'groxhunt', 2 * P));
+  withRng([0.1, ...fill(2 * P, 0.9)], () => E.step(da, 300));
   assert.strictEqual(da.thirst, 99);                        // andere Orden dürsten nicht
 });
 
@@ -1095,9 +1108,9 @@ test('Ordens-Ereignisse: Geschenk, Bonus für ein Jahr, Spur eines Gefallenen ö
   assert.ok(E.isUnlocked(s, hunt));
   assert.match(s.log.at(-1).text, /Spur eines Gefallenen/);
   near(s.eventIn, 2000, 'nächstes Ereignis');
-  s.eventIn = 1e9; s.marines.brothers = 12;
-  assert.ok(E.sendMission(s, 'fallenhunt', 10));
-  withRng([0.01, ...Array(10).fill(0.99)], () => E.step(s, 2400));   // Sieg mit 5 % Chance, niemand fällt
+  s.eventIn = 1e9; s.marines.brothers = 12 * P;
+  assert.ok(E.sendMission(s, 'fallenhunt', 10 * P));
+  withRng([0.01, ...fill(10 * P, 0.99)], () => E.step(s, 2400));   // Sieg mit 5 % Chance, niemand fällt
   near(s.res.archeotech, 3 * 1.5, 'Dark Angels: Archäotech +50 %');
   assert.strictEqual(E.isUnlocked(s, hunt), false);         // die Spur ist kalt
   const u = armed('um');
@@ -1115,16 +1128,16 @@ test('Ordens-Ereignisse: Geschenk, Bonus für ein Jahr, Spur eines Gefallenen ö
 
 test('Speichern und Laden mit Glaube, Litanei, Riten, Boni, Durst und Todeskompanie', () => {
   const s = devout('ba');
-  Object.assign(s, { litany: 'wrath', litanyLeft: 400, piety: 1234, thirst: 42, deathCompany: 1, companies: 1, eventIn: 777 });
+  Object.assign(s, { litany: 'wrath', litanyLeft: 400, piety: 1234, thirst: 42, deathCompany: P, companies: 1, eventIn: 777 });
   s.rites.arms = true;
   s.boons = [{ key: 'moral.bonus', value: 0.1, left: 300 }];
-  s.missions.push({ id: 'groxhunt', brothers: 2, wulfen: 0, left: 10, dc: 1 });
+  s.missions.push({ id: 'groxhunt', brothers: 2 * P, wulfen: 0, left: 10, dc: P });
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
-  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', rites: { arms: true, nope: true }, litany: 'nope', litanyLeft: 1e9,
-    piety: -5, thirst: 400, deathCompany: 7, companies: 3.7, eventIn: -1,
+  const bad = E.load(JSON.stringify({ v: 2, chapter: 'da', rites: { arms: true, nope: true }, litany: 'nope', litanyLeft: 1e9,
+    piety: -5, thirst: 400, deathCompany: 7 * P, companies: 3.7, eventIn: -1,
     boons: [{ key: 'x', value: 0.1, left: 3 }, { key: 'power.bonus', value: 0.2, left: 1e9 }] }));
   assert.deepStrictEqual([bad.rites, bad.litany, bad.litanyLeft, bad.piety, bad.thirst, bad.deathCompany, bad.companies, bad.eventIn],
-    [{ arms: true }, null, 0, 0, 100, 1, 3, D.rules.eventEvery]);
+    [{ arms: true }, null, 0, 0, 100, P, 3, D.rules.eventEvery]);
   assert.deepStrictEqual(bad.boons, [{ key: 'power.bonus', value: 0.2, left: 1000 }]);
 });
 
@@ -1187,9 +1200,9 @@ test('Tausch: Paket gegen Paket, Ausbeute mit Kontor und Stufe, Ansehen und Hilf
   assert.strictEqual(E.trade(s, 'varos'), false);           // nichts zu geben
   assert.strictEqual(E.trade(s, 'valkar'), false);          // noch kein Kontakt
   assert.strictEqual(E.trade(s, 'nope'), false);
-  s.bld.quarters = 2; s._eff = null; s.serfs = 3; s.res.supplies = 400;
-  assert.ok(E.trade(s, 'guard'));                           // 2 Knechte, aber nur 1 Platz frei
-  assert.strictEqual(s.serfs, 4);
+  s.bld.quarters = 2; s._eff = null; s.serfs = 3 * P; s.res.supplies = 400;
+  assert.ok(E.trade(s, 'guard'));                           // 2 P Knechte, aber nur P Plätze frei
+  assert.strictEqual(s.serfs, 4 * P);
   s.seen.valkar = true; s.docked = true; s.res.promethium = 60;
   assert.ok(E.trade(s, 'valkar'));
   near(s.res.amasec, 8 * (1 + 0.05 + 0.5), 'Kontor +5 %, im Hafen +50 %');
@@ -1236,17 +1249,17 @@ test('Mechanicus: Servitor-Zelle ab Stufe 1, Servitor erschaffen, Techmarine ab 
   assert.strictEqual(E.isUnlocked(s, tm), false);
   s.res.plasteel = 20; s.res.archeotech = 2;
   assert.ok(E.build(s, 'servitorCell'));
-  s.serfs = 2; s.jobs.scrapper = 2;
+  s.serfs = 2 * P; s.jobs.scrapper = 2 * P;
   assert.ok(E.makeServitor(s));
-  assert.deepStrictEqual([s.serfs, s.jobs.scrapper, s.marines.servitors, s.res.plasteel], [1, 1, 1, 7]);
+  assert.deepStrictEqual([s.serfs, s.jobs.scrapper, s.marines.servitors, s.res.plasteel], [P, P, P, 7]);
   s.res.plasteel = 4;
   assert.strictEqual(E.makeServitor(s), false);             // zu wenig Plastahl
-  s.marines.servitors = 10; s.craftAcc = 0;
+  s.marines.servitors = 10 * P; s.craftAcc = 0;
   assert.ok(E.setServitorRecipe(s, 'servoskull'));
   E.step(s, 1);
   near(s.craftAcc, 10 * 0.02 * 1.1, 'eine Zelle: Servitoren 10 % schneller');
   s.standing.mechanicus = 15; s._eff = null;
-  assert.ok(E.setOffice(s, 'techmarine', 1));
+  assert.ok(E.setOffice(s, 'techmarine', P));
   near(E.craftYield(s), 1 + 0.06 + 2 * 0.03 + 0.1, 'Schmiede, Hilfe Stufe 2, Techmarine');
 });
 
@@ -1279,9 +1292,9 @@ test('Welt-Ereignisse: Freihändler, Warpsturm, WAAAGH! und Genestealer-Kult', (
   near(E.effects(s)['arrival.bonus'], 0.1 + 0.1 - 0.5, 'Kult: Zuzug −50 %');
   const purge = byId(D.missions, 'cultpurge');
   assert.ok(E.isUnlocked(s, purge));
-  delete s.places.ashwaste; s.marines.brothers = 10;       // ohne Aschewüste keine Überfälle während des Einsatzes
-  assert.ok(E.sendMission(s, 'cultpurge', 10));
-  withRng([0.01, ...Array(10).fill(0.99)], () => E.step(s, s.missions[0].left));
+  delete s.places.ashwaste; s.marines.brothers = 10 * P;   // ohne Aschewüste keine Überfälle während des Einsatzes
+  assert.ok(E.sendMission(s, 'cultpurge', 10 * P));
+  withRng([0.01, ...fill(10 * P, 0.99)], () => E.step(s, s.missions[0].left));
   assert.deepStrictEqual([!!s.seen.cult, !!s.seen.cultCrushed], [false, true]);
   assert.ok(E.isUnlocked(s, byId(D.partners, 'inquisition')));
   near(E.effects(s)['arrival.bonus'], 0.2, 'Kult zerschlagen');
@@ -1293,7 +1306,7 @@ test('Speichern und Laden mit Ansehen, Aufträgen, Visionen, Ereignis-Uhren und 
     visionIn: 123, vision: 7, storm: 300, docked: true, eventIn: 777 });
   for (const w of D.worldEvents) s.worldIn[w.id] = 55;
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
-  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', standing: { varos: -3, nope: 5, mechanicus: 1e12 },
+  const bad = E.load(JSON.stringify({ v: 2, chapter: 'da', standing: { varos: -3, nope: 5, mechanicus: 1e12 },
     standingOrders: { varos: true, nope: true, guard: 'ja' }, orderTimer: 99, visionIn: -1, vision: 99,
     worldIn: { trader: 1e12, nope: 5 }, storm: 1e9, docked: 'ja' }));
   assert.deepStrictEqual([bad.standing, bad.standingOrders, bad.orderTimer, bad.visionIn, bad.vision, bad.worldIn.trader,
@@ -1335,40 +1348,40 @@ test('Schiffe: Platz je Landeplattform und Werft, Preis mit Faktor, Schlachtbark
 
 test('Feldzug: nur zu Nachbarn, kostet Navigationsdaten und Treibstoff, Flotte und Trupp kämpfen', () => {
   const s = fleeted('um');
-  s.marines.brothers = 20;
-  assert.strictEqual(E.startCampaign(s, 'metallum', 10), false);   // kein Nachbar von Kharos
-  assert.strictEqual(E.startCampaign(s, 'varos', 4), false);       // Trupp zu klein
-  near(E.campaignChance(s, 'varos', 10), 0.5 + 0.4 * Math.log2(100 / 150), 'ohne Flotte');
+  s.marines.brothers = 20 * P;
+  assert.strictEqual(E.startCampaign(s, 'metallum', 10 * P), false);   // kein Nachbar von Kharos
+  assert.strictEqual(E.startCampaign(s, 'varos', 5 * P - 1), false);   // Trupp zu klein
+  near(E.campaignChance(s, 'varos', 10 * P), 0.5 + 0.4 * Math.log2(100 / 150), 'ohne Flotte');
   assert.ok(E.build(s, 'landingPad'));
   for (let i = 0; i < 3; i++) assert.ok(E.buildShip(s, 'thunderhawk'));
   const nav = s.res.navdata, fuel = s.res.fuelcell;
-  assert.ok(E.startCampaign(s, 'varos', 10));                      // Stärke 30 + 100 gegen 150
+  assert.ok(E.startCampaign(s, 'varos', 10 * P));                  // Stärke 30 + 100 gegen 150
   assert.deepStrictEqual([nav - s.res.navdata, fuel - s.res.fuelcell], [2, 4]);
-  assert.strictEqual(E.freeBrothers(s), 10);
-  assert.strictEqual(E.startCampaign(s, 'tyrrhen', 5), false);     // einer zur Zeit
-  withRng([0.1, ...Array(10).fill(0.99)], () => E.step(s, 3600));  // Sieg, niemand fällt
-  assert.deepStrictEqual([!!s.systems.varos, s.campaign, s.marines.brothers], [true, null, 20]);
+  assert.strictEqual(E.freeBrothers(s), 10 * P);
+  assert.strictEqual(E.startCampaign(s, 'tyrrhen', 5 * P), false); // einer zur Zeit
+  withRng([0.1, ...fill(10 * P, 0.99)], () => E.step(s, 3600));    // Sieg, niemand fällt
+  assert.deepStrictEqual([!!s.systems.varos, s.campaign, s.marines.brothers], [true, null, 20 * P]);
   near(E.effects(s)['supplies.bonus'] || 0, 0.15, 'Varos: Vorräte +15 %');
   assert.ok(s.meta.honors.some(h => h.text === 'System befreit: Varos Agraria.'));
   assert.ok(E.reachable(s, 'metallum'));                           // jetzt Nachbar
-  assert.ok(E.startCampaign(s, 'oriel', 10));                      // Stärke 130 gegen 350: Chance 5 %
-  withRng([0.9, 0.1, 0.9, ...Array(9).fill(0.9)], () => E.step(s, 7200));
-  assert.deepStrictEqual([!!s.systems.oriel, s.marines.brothers], [false, 19]);
+  assert.ok(E.startCampaign(s, 'oriel', 10 * P));                  // Stärke 130 gegen 350: Chance 5 %
+  withRng([0.9, ...fill(P, 0.1), ...fill(9 * P, 0.9), ...fill(P, 0.9)], () => E.step(s, 7200));
+  assert.deepStrictEqual([!!s.systems.oriel, s.marines.brothers], [false, 19 * P]);
   const lines = s.log.slice(-2).map(l => l.text);
   assert.match(lines[0], /^Feldzug gescheitert: Sankt Oriel/);
-  assert.match(lines[1], /^Gefallen: Bruder/);
+  assert.strictEqual(lines[1], `Gefallen: ${de(P)} Brüder.`);
 });
 
 test('Feldzug-Dauer: Kartentisch und Navigatorenhaus kürzen, im Warpsturm ruht der Feldzug', () => {
   const s = fleeted();
-  s.marines.brothers = 10;
+  s.marines.brothers = 10 * P;
   near(E.campaignTime(s, 'varos'), 3600, 'Grunddauer');
   assert.ok(E.upgradeVisible(s, 'holotable'));
   s.res.datatablet = 5;
   assert.ok(E.buyUpgrade(s, 'holotable'));
   s.standing.navis = 5; s._eff = null;                             // Navigatorenhaus Stufe 1
   near(E.campaignTime(s, 'varos'), 3600 * (1 - 0.2 - 0.03), 'Kartentisch −20 %, Navigatorenhaus −3 %');
-  assert.ok(E.startCampaign(s, 'varos', 5));
+  assert.ok(E.startCampaign(s, 'varos', 5 * P));
   const left = s.campaign.left;
   s.storm = 500; s._eff = null;
   E.step(s, 100);
@@ -1384,54 +1397,54 @@ test('Feldzug-Dauer: Kartentisch und Navigatorenhaus kürzen, im Warpsturm ruht 
 test('Systemboni: Knechte-Plätze +10 %, Navigationsdaten je Vision, Ruhm aus Beute', () => {
   const s = fleeted('um');
   s.bld.quarters = 5; s._eff = null;
-  assert.strictEqual(E.serfCap(s), 10);
+  assert.strictEqual(E.serfCap(s), 10 * P);
   s.systems.tyrrhen = true; s._eff = null;
-  assert.strictEqual(E.serfCap(s), 11);
+  assert.strictEqual(E.serfCap(s), 11 * P);
   s.systems.beacon = true; s._eff = null;
   s.vision = 5;
   const nav = s.res.navdata;
   assert.ok(E.catchVision(s));
   near(s.res.navdata, nav + 2, 'Leuchtfeuer: +1 je Vision');
   s.ships.barge = 1; s._eff = null;
-  s.threat = 50; s.marines.brothers = 10;
-  assert.ok(E.sendMission(s, 'raiders', 5));
-  withRng([0.1, 0.9, 0.9, 0.9, 0.9, 0.9], () => E.step(s, 240));
+  s.threat = 50; s.marines.brothers = 10 * P;
+  assert.ok(E.sendMission(s, 'raiders', 5 * P));
+  withRng([0.1, ...fill(5 * P, 0.9)], () => E.step(s, 240));
   near(s.res.renown, 5 * 1.1, 'Schlachtbarke: Ruhm +10 %');
 });
 
 test('Speichern und Laden mit Schiffen, Systemen und laufendem Feldzug', () => {
   const s = fleeted();
-  s.marines.brothers = 12;
+  s.marines.brothers = 12 * P;
   s.ships.thunderhawk = 2; s.systems.varos = true; s.bld.landingPad = 1; s._eff = null;
   s.eventIn = 777; s.visionIn = 100; for (const w of D.worldEvents) s.worldIn[w.id] = 55; // gültige Uhren
-  assert.ok(E.startCampaign(s, 'metallum', 8));
+  assert.ok(E.startCampaign(s, 'metallum', 8 * P));
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
-  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', marines: { brothers: 6 }, ships: { thunderhawk: 2.7, nope: 3, barge: 4 },
-    systems: { varos: true, nope: true, kharos: true, rift: 'ja' }, campaign: { id: 'rift', brothers: 9, wulfen: 0, left: 1e9 } }));
+  const bad = E.load(JSON.stringify({ v: 2, chapter: 'da', marines: { brothers: 6 * P }, ships: { thunderhawk: 2.7, nope: 3, barge: 4 },
+    systems: { varos: true, nope: true, kharos: true, rift: 'ja' }, campaign: { id: 'rift', brothers: 9 * P, wulfen: 0, left: 1e9 } }));
   assert.deepStrictEqual([bad.ships, bad.systems, bad.campaign], [{ thunderhawk: 2, cruiser: 0, barge: 1 }, { varos: true }, null]);
-  const ok = E.load(JSON.stringify({ v: 1, chapter: 'da', marines: { brothers: 6 }, campaign: { id: 'rift', brothers: 5, wulfen: 0, left: 1e9 } }));
-  assert.deepStrictEqual(ok.campaign, { id: 'rift', brothers: 5, wulfen: 0, left: 21600 });
+  const ok = E.load(JSON.stringify({ v: 2, chapter: 'da', marines: { brothers: 6 * P }, campaign: { id: 'rift', brothers: 5 * P, wulfen: 0, left: 1e9 } }));
+  assert.deepStrictEqual(ok.campaign, { id: 'rift', brothers: 5 * P, wulfen: 0, left: 21600 });
 });
 
 // ---------- Etappe 8: Nachfolgeorden ----------
 
-// Bereit zur Gründung: Gründungsrecht, 120 Brüder, 25 Gensaat, 1.200 Ruhm, zwei Systeme mit Vermächtnis (5 + 10).
+// Bereit zur Gründung: Gründungsrecht, 120 P Brüder, 25 P Gensaat, 1.200 Ruhm, zwei Systeme mit Vermächtnis (5 + 10).
 function ripe(ch = 'da') {
   const s = fleeted(ch);
   s.tech.founding = true;
-  s.marines.brothers = 120; s.bld.geneVault = 3;
-  s.res.geneseed = 25; s.res.renown = 1200;
+  s.marines.brothers = 120 * P; s.bld.geneVault = 3;
+  s.res.geneseed = 25 * P; s.res.renown = 1200;
   s.systems.kathar = true; s.systems.rift = true; s._eff = null;
   return s;
 }
 
-test('Vermächtnis: Brüder ÷ 10, Ruhm ÷ 500, Systeme; Gründung braucht Lehre, 100 Brüder, 20 Gensaat', () => {
+test('Vermächtnis: Brüder ÷ 10 P, Ruhm ÷ 500, Systeme; Gründung braucht Lehre, 100 P Brüder, 20 P Gensaat', () => {
   const s = ripe();
   assert.deepStrictEqual(E.legacyGain(s), { brothers: 12, renown: 2, systems: 15, total: 29 });
   assert.strictEqual(E.foundBlock(s), null);
-  s.res.geneseed = 19;
+  s.res.geneseed = 20 * P - 1;
   assert.strictEqual(E.foundBlock(s), 'geneseed');
-  s.marines.brothers = 99;
+  s.marines.brothers = 100 * P - 1;
   assert.strictEqual(E.foundBlock(s), 'brothers');
   s.tech.founding = false;
   assert.strictEqual(E.foundBlock(s), 'lore');
@@ -1447,7 +1460,7 @@ test('Gründung: neuer Orden nach Linie mit Name und Farben, Vermächtnis wächs
   assert.deepStrictEqual([n.meta.legacy, n.meta.legacyFree, n.meta.lines, n.meta.foundings], [29, 29, { sal: 1 }, 1]);
   assert.strictEqual(n.meta.honors.length, honors + 1);
   assert.match(n.meta.honors.at(-1).text, /Nachfolgeorden gegründet: Wächter der Asche \(Linie Salamanders\)/);
-  assert.deepStrictEqual([n.serfs, n.marines.brothers, n.marines.coma, Object.keys(n.tech).length, n.res.renown], [0, 0, 5, 0, 0]);
+  assert.deepStrictEqual([n.serfs, n.marines.brothers, n.marines.coma, Object.keys(n.tech).length, n.res.renown], [0, 0, 5 * P, 0, 0]);
   assert.match(n.log[0].text, /Wächter der Asche/);
   assert.strictEqual(E.found(ripe(), { name: '  ', lineage: 'sal' }), null);            // Name fehlt
   assert.strictEqual(E.found(ripe(), { name: 'X'.repeat(25), lineage: 'sal' }), null);   // zu lang
@@ -1464,10 +1477,10 @@ test('Linienstufe verstärkt den Linien-Bonus; Vermächtnis gibt +1 % Produktion
   near(E.effects(s)['arrival.bonus'], 0.1 * 1.5, 'Zuzug');
   near(E.effects(s)['company.bonus'], 0.05, 'Eigenheit bleibt');
   near(E.cap(s, 'scrap'), 150 * (1 + 0.3 + 0.2), 'Lager: Linie und Vermächtnis');
-  s.serfs = 1; s.jobs.scrapper = 1;
+  s.serfs = P; s.jobs.scrapper = P;
   near(E.rates(s).scrap, 0.3 * 1.2, 'Produktion +20 %');
   const b = E.create('ba', { lines: { ba: 1 } });
-  near(E.power(b, 1, 0), 10 * (1 + 0.2 * 1.25), 'Blood Angels Stufe 1');
+  near(E.power(b, P, 0), 10 * (1 + 0.2 * 1.25), 'Blood Angels Stufe 1');
 });
 
 test('Relikte: kaufen mit freien Punkten, Wirkung sofort, Startpaket bei der Gründung, Ewige Wacht', () => {
@@ -1483,7 +1496,7 @@ test('Relikte: kaufen mit freien Punkten, Wirkung sofort, Startpaket bei der Gr�
   const n = E.found(s, { name: 'Ultima Vigil', lineage: 'um' });
   assert.deepStrictEqual([n.res.scrap, n.bld.hydroFarm, n.bld.quarters, !!n.tech.salvage, n.meta.legacy], [50, 1, 1, true, 89]);
   const v = E.create('da', { relics: { vigil: true, veterans: true } });
-  assert.deepStrictEqual([E.offlineMax(v), v.marines.coma, E.marineCap(v)], [7 * 86400, 10, 10]);
+  assert.deepStrictEqual([E.offlineMax(v), v.marines.coma, E.marineCap(v)], [7 * 86400, 10 * P, 10 * P]);
   assert.strictEqual(E.offlineMax(E.create('da')), 3 * 86400);
 });
 
@@ -1491,7 +1504,7 @@ test('Speichern und Laden mit Vermächtnis, Relikten, Linien, Name und Farben', 
   const s = E.create('sal', { legacy: 40, legacyFree: 12, relics: { skulls: true }, lines: { sal: 2, um: 1 }, foundings: 3 },
     { name: 'Aschewächter', palette: 'teal' });
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));
-  const bad = E.load(JSON.stringify({ v: 1, chapter: 'da', name: 'X'.repeat(40), palette: 'nope',
+  const bad = E.load(JSON.stringify({ v: 2, chapter: 'da', name: 'X'.repeat(40), palette: 'nope',
     meta: { legacy: -5, legacyFree: 1e12, relics: { skulls: true, nope: true }, lines: { da: 2.5, nope: 3, um: -1 }, foundings: 'viele' } }));
   assert.deepStrictEqual([bad.name, bad.palette, bad.meta.legacy, bad.meta.legacyFree, bad.meta.relics, bad.meta.lines, bad.meta.foundings],
     ['Dark Angels', null, 0, 0, { skulls: true }, { da: 2 }, 0]);
@@ -1516,6 +1529,100 @@ test('Flair: alle 600 s eine Zeile ab dem ersten Knecht, Namen erst mit wachen B
   b.flairIn = 1;
   E.simulate(b, 3600);                                        // offline keine Flair-Zeilen
   assert.ok(b.log.every(l => l.id <= before + 1 || !D.flair.includes(l.text)));
+});
+
+// ---------- Etappe 10: Zahlen ×100 ----------
+
+test('scalePop: Köpfe ×P, Wirkung je Kopf ÷P (Stichproben aus jeder Tabelle)', () => {
+  const R = D.rules;
+  assert.strictEqual(R.saveVersion, 2);
+  near(R.serfFood, 0.3 / P, 'Essen je Knecht');
+  near(R.arrivalEvery, 20 / P, 'Zuzug: Abstand je Kopf');
+  near(R.crowdPenalty, 0.005 / P, 'Gedränge je Kopf');
+  assert.deepStrictEqual([R.crowdFree, R.comaBrothers, R.marineBase, R.companySize, R.foundBrothers, R.foundGeneseed],
+    [20 * P, 5 * P, 5 * P, 100 * P, 100 * P, 20 * P]);
+  assert.deepStrictEqual(R.campaignSquad, [5 * P, 50 * P]);
+  near(R.powerBrother, 10 / P, 'Kampfkraft je Bruder');
+  assert.strictEqual(byId(D.resources, 'geneseed').cap, 3 * P);
+  assert.strictEqual(byId(D.buildings, 'quarters').effects['serfs.cap'], 2 * P);
+  assert.strictEqual(byId(D.buildings, 'hab').effects['serfs.cap'], 5 * P);
+  assert.strictEqual(byId(D.buildings, 'cells').effects['marines.cap'], 5 * P);
+  near(byId(D.buildings, 'arena').effects['aspirants.rate'], 0.001 * P, 'Arena');
+  assert.strictEqual(byId(D.buildings, 'geneVault').effects['geneseed.cap'], 10 * P);
+  near(byId(D.jobs, 'scrapper').effects['scrap.rate'], 0.3 / P, 'Schrottsammler');
+  near(byId(D.offices, 'scriptor').effects['knowledge.rate'], 0.5 / P, 'Scriptor');
+  near(byId(D.offices, 'techmarine').effects['craft.bonus'], 0.1 / P, 'Techmarine');
+  assert.strictEqual(byId(D.places, 'crashsite').reward.geneseed, 5 * P);
+  assert.strictEqual(byId(D.places, 'crashsite').reward.scrap, 40);            // Waren bleiben
+  assert.deepStrictEqual(byId(D.missions, 'raiders').squad, [3 * P, 5 * P]);
+  assert.strictEqual(byId(D.partners, 'guard').get.serfs, 2 * P);
+  assert.strictEqual(byId(D.relics, 'veterans').start.coma, 5 * P);
+  assert.strictEqual(byId(D.relics, 'reserve').effects['geneseed.cap'], 5 * P);
+  assert.strictEqual(byId(D.buildings, 'storehouse').effects['supplies.cap'], 150);   // Lager bleiben
+});
+
+test('Zuzug: stetig P je 20 s, das Log fasst höchstens einmal je Minute zusammen', () => {
+  const s = fresh();
+  s.bld.quarters = 50; s.bld.hydroFarm = 40; s.res.supplies = 200; s.seen.serfs = true; s.serfs = P;
+  const before = s.logSeq;
+  E.step(s, 200);
+  assert.strictEqual(s.serfs, P + 10 * P);                   // 200 s: 10 P mehr
+  const lines = s.log.filter(l => l.id > before).map(l => l.text);
+  assert.ok(lines.length <= 4 && lines.every(t => /^\+[\d.]+ Knechte ziehen ein\.$/.test(t)), lines.join(' | '));
+  const sum = lines.reduce((n, t) => n + Number(t.match(/[\d.]+/)[0].replace(/\./g, '')), 0);
+  assert.strictEqual(sum + s._arrived, 10 * P);              // der Rest kommt in die nächste Zeile
+});
+
+test('Jobs und Ämter: Schritte beliebiger Größe, nie mehr als frei oder vergeben', () => {
+  const s = awake();
+  s.serfs = 3 * P;
+  assert.ok(E.assign(s, 'scrapper', 3 * P));                 // „alle“
+  assert.strictEqual(E.assign(s, 'scrapper', 1), false);
+  assert.strictEqual(E.assign(s, 'scrapper', -(3 * P + 1)), false);
+  assert.ok(E.assign(s, 'scrapper', -3 * P));                // „0“
+  s.tech.librarius = true;
+  assert.strictEqual(E.setOffice(s, 'scriptor', 5 * P + 1), false);
+  assert.ok(E.setOffice(s, 'scriptor', 5 * P));
+  assert.strictEqual(E.setOffice(s, 'scriptor', -(5 * P + 1)), false);
+  assert.ok(E.setOffice(s, 'scriptor', -5 * P));
+});
+
+test('Binomial-Zufall: bleibt in 0…n, trifft den Erwartungswert, große Zahlen per Näherung', () => {
+  withSeed(7, () => {
+    let sum = 0;
+    for (let i = 0; i < 200; i++) {
+      const k = E.binom(P, 0.3);
+      assert.ok(Number.isInteger(k) && k >= 0 && k <= P);
+      sum += k;
+    }
+    near(Math.round(sum / 200 / P * 100) / 100, 0.3, 'Mittel');
+    const big = E.binom(100000, 0.25);
+    assert.ok(Math.abs(big - 25000) < 1000, `Näherung ${big}`);
+  });
+  assert.deepStrictEqual([E.binom(0, 0.5), E.binom(10, 0), E.binom(10, 1)], [0, 0, 10]);
+});
+
+test('Migration v1 → v2: Köpfe ×P, Schübe statt Listen, gleicher Ertrag je Sekunde', () => {
+  const v1 = {
+    v: 1, chapter: 'ws', serfs: 7, jobs: { scrapper: 3, farmer: 2 }, offices: { apothecary: 1 },
+    tech: { hydroponics: true, geneseedlore: true }, bld: { hydroFarm: 4, quarters: 4, apothecarion: 1, cells: 2, arena: 1 },
+    res: { supplies: 120, aspirants: 1.5, geneseed: 4, scrap: 10 },
+    marines: { coma: 0, brothers: 6, neophytes: [300, 50], implants: [120], servitors: 2, wulfen: 0 },
+    missions: [{ id: 'groxhunt', brothers: 2, wulfen: 0, left: 100 }], orders: { groxhunt: 2 },
+    places: { orevein: true, tribes: true }, arrival: 13, deathCompany: 1, companies: 0, seen: { serfs: true, marines: true },
+  };
+  const s = E.load(JSON.stringify(v1));
+  assert.strictEqual(s.v, 2);
+  assert.deepStrictEqual([s.serfs, s.jobs.scrapper, s.jobs.farmer, s.offices.apothecary], [7 * P, 3 * P, 2 * P, P]);
+  assert.deepStrictEqual(s.marines, { coma: 0, brothers: 6 * P, neophytes: [{ n: P, left: 300 }, { n: P, left: 50 }],
+    implants: [{ n: P, left: 120 }], servitors: 2 * P, wulfen: 0 });
+  assert.deepStrictEqual([s.res.aspirants, s.res.geneseed, s.res.supplies, s.res.scrap], [1.5 * P, 4 * P, 120, 10]);
+  assert.deepStrictEqual([s.missions[0].brothers, s.orders.groxhunt, s.deathCompany, s.arrival], [2 * P, 2 * P, P, 0]);
+  // Ertrag wie mit dem alten Stand: 3 Schrottsammler 0,9/s, 2 Servitoren 0,3/s; Essen 7 × 0,3 + 6 × 0,4 + 1,5 × 0,3 + Neophyten
+  near(E.rates(s).scrap, 0.9 + 0.3, 'Schrott je Sekunde');
+  const food = 4 * 0.5 * 1.25 + 2 * 1.25 - 7 * 0.3 - 1.5 * 0.3 - (6 + 2) * 0.4;
+  near(E.rates(s).supplies, food, 'Vorräte je Sekunde');
+  assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));  // danach normal speicherbar
 });
 
 // ---------- Tempo-Bot ----------
@@ -1598,9 +1705,10 @@ function think(s) {
   const open = D.techs.filter(t => E.isUnlocked(s, t) && !s.tech[t.id]).sort((a, b) => total(a.cost) - total(b.cost));
   for (const t of open) E.research(s, t.id);
   for (const p of D.places) if (E.placeState(s, p.id) === 'open') E.scout(s, p.id);
-  if (unlocked(s, D.offices, 'apothecary') && s.offices.apothecary < 1) E.setOffice(s, 'apothecary', 1);
-  if (unlocked(s, D.offices, 'priest') && s.offices.priest < 1) E.setOffice(s, 'priest', 1);
-  if (unlocked(s, D.offices, 'techmarine') && s.offices.techmarine < 1) E.setOffice(s, 'techmarine', 1);
+  for (const id of ['apothecary', 'priest', 'techmarine']) {
+    const k = Math.min(P - s.offices[id], E.freeBrothers(s));
+    if (unlocked(s, D.offices, id) && k > 0) E.setOffice(s, id, k);
+  }
   // Flotte: Visionen fangen, Schiffe bauen, Feldzüge mit guter Chance
   if (s.vision > 0) E.catchVision(s);
   for (const x of D.ships) while (E.buildShip(s, x.id));
@@ -1647,15 +1755,17 @@ function think(s) {
   const lean = () => (s.seen.marines ? E.leanFood(s) : E.rates(s).supplies); // mit Brüdern für den Frost planen
   // Neue Aufgaben bekommen Leute von den Schrottsammlern: 1 Raffineriearbeiter je 2 Bergleute, 1 Prediger je 6 Knechte
   for (const [job, want] of [['refiner', Math.floor(s.jobs.miner / 2)], ['preacher', Math.floor(s.serfs / 6)]]) {
-    while (unlocked(s, D.jobs, job) && s.jobs[job] < want && s.jobs.scrapper > 1) { E.assign(s, 'scrapper', -1); E.assign(s, job, 1); }
+    const k = Math.min(want - s.jobs[job], s.jobs.scrapper - 1);
+    if (unlocked(s, D.jobs, job) && k > 0) { E.assign(s, 'scrapper', -k); E.assign(s, job, k); }
   }
+  // in Paketen bis P (wie früher je Knecht)
   while (E.free(s) > 0) {
     const job = lean() < 1 && unlocked(s, D.jobs, 'farmer') ? 'farmer'
       : unlocked(s, D.jobs, 'preacher') && s.jobs.preacher * 6 < s.serfs ? 'preacher'
       : unlocked(s, D.jobs, 'refiner') && s.jobs.refiner * 2 < s.jobs.miner ? 'refiner'
       : unlocked(s, D.jobs, 'miner') && s.jobs.miner * 2 < s.jobs.scrapper ? 'miner'
       : unlocked(s, D.jobs, 'scribe') && s.jobs.scribe <= s.jobs.scrapper ? 'scribe' : 'scrapper';
-    if (!E.assign(s, job, 1)) break;
+    if (!E.assign(s, job, Math.min(E.free(s), P))) break;
   }
   const food = lean() < 1 ? ['hydroFarm'] : [];
   // Lager zu klein für die nächste Lehre: Archivum oder Skriptorium, je nachdem was billiger ist.

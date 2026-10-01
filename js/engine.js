@@ -12,6 +12,7 @@ const Engine = (() => {
   const BOON_KEYS = new Set(Object.values(D.chapterEvents).flat().flatMap(ev => Object.keys(ev.boon || {})));
   const THIRST_MAX = 100; // Roter Durst in Prozent
   const num = v => (Math.round(v * 10) / 10).toLocaleString('de-DE'); // Zahlen im Log
+  const P = R.popScale; // Köpfe je Schub (Etappe 10: ×100)
   const CLICKS = new Set(D.clicks.map(c => c.id));
   const pad3 = n => String(n).padStart(3, '0');
 
@@ -27,7 +28,7 @@ const Engine = (() => {
       palette: PALETTE[opts.palette] ? opts.palette : null,
       res: {}, bld: {}, jobs: {}, tech: {}, seen: {},
       serfs: 0, arrival: 0, hungry: 0, isHungry: false,
-      // neophytes/implants: Restsekunden je Kopf
+      // neophytes/implants: Schübe { n: Köpfe, left: Restsekunden }
       marines: { coma: R.comaBrothers, brothers: 0, neophytes: [], implants: [], servitors: 0, wulfen: 0 },
       offices: {}, places: {}, scouts: [],
       missions: [], orders: {}, threat: 0, raidTimer: 0,
@@ -145,13 +146,15 @@ const Engine = (() => {
 
   // Brüder-Plätze teilen sich Kampfbrüder, Wulfen, Neophyten und laufende Implantationen.
   const marineCap = s => R.marineBase + bonus(s, 'marines.cap');
+  const heads = list => list.reduce((n, b) => n + b.n, 0); // Köpfe in Schüben
   const marinesUsed = s => {
     const m = s.marines;
-    return m.brothers + m.wulfen + m.neophytes.length + m.implants.length;
+    return m.brothers + m.wulfen + heads(m.neophytes) + heads(m.implants);
   };
   const officeCount = s => D.offices.reduce((n, o) => n + s.offices[o.id], 0);
   const away = (s, kind) => s.missions.reduce((n, x) => n + x[kind], 0) + (s.campaign ? s.campaign[kind] : 0);
-  const freeBrothers = s => s.marines.brothers - officeCount(s) - s.scouts.length - away(s, 'brothers');
+  // Ein Aufklärer-Trupp bindet P Brüder.
+  const freeBrothers = s => s.marines.brothers - officeCount(s) - s.scouts.length * P - away(s, 'brothers');
   const freeWulfen = s => s.marines.wulfen - away(s, 'wulfen');
   const power = (s, brothers, wulfen) =>
     (brothers * R.powerBrother + wulfen * R.powerWulf) * (1 + bonus(s, 'power.bonus'));
@@ -165,13 +168,24 @@ const Engine = (() => {
   const officeName = (s, id) => OFF[id].names?.[s.chapter] || OFF[id].name;
   const brotherName = s => { const n = CH[s.chapter].names; return n[s.logSeq % n.length]; };
 
-  // Wer bei Hunger flieht (oder beim Laden gestrichen wird): erst einer ohne Job, dann andere Jobs,
-  // Bauern zuletzt. Liefert die Job-Id oder null, wenn ein Knecht ohne Job gehen kann.
-  function leaver(s) {
-    if (free(s) >= 1) return null;
-    const busy = D.jobs.filter(j => s.jobs[j.id] > 0);
-    const others = busy.filter(j => !j.farm);
-    return (others.length ? others : busy).reduce((a, j) => (s.jobs[j.id] > s.jobs[a.id] ? j : a)).id;
+  // Nimmt n Knechte aus Jobs: immer vom größten Job, Bauern zuletzt.
+  function takeJobs(s, n) {
+    while (n > 0) {
+      const busy = D.jobs.filter(j => s.jobs[j.id] > 0);
+      if (!busy.length) return;
+      const others = busy.filter(j => !j.farm);
+      const j = (others.length ? others : busy).reduce((a, b) => (s.jobs[b.id] > s.jobs[a.id] ? b : a));
+      const k = Math.min(n, s.jobs[j.id]);
+      s.jobs[j.id] -= k;
+      n -= k;
+    }
+  }
+  // n Knechte gehen (Flucht, Überfall, Servitor): erst die ohne Job, dann aus Jobs.
+  function dismiss(s, n) {
+    n = Math.min(n, s.serfs);
+    takeJobs(s, n - Math.min(n, Math.max(0, free(s))));
+    s.serfs -= n;
+    return n;
   }
 
   const LUXURY = D.resources.filter(r => r.luxury);
@@ -201,7 +215,7 @@ const Engine = (() => {
     const prod = 1 + productionBonus(s);
     for (const id in out) out[id] *= (1 + bonus(s, id + '.bonus')) * (mult[id] ?? 1) * (RES[id].pop ? 1 : prod);
     out.supplies -= R.serfFood * s.serfs + R.aspirantFood * s.res.aspirants
-      + R.marineFood * (m.brothers + m.wulfen + m.neophytes.length);
+      + R.marineFood * (m.brothers + m.wulfen + heads(m.neophytes));
     for (const r of LUXURY) if (s.res[r.id] > 0) out[r.id] -= R.luxuryUse * s.serfs;
     return out;
   }
@@ -251,14 +265,12 @@ const Engine = (() => {
     const limit = R.fleeAfter * (1 + bonus(s, 'flee.slow'));
     if (s.hungry < limit - 1e-9) return;
     s.hungry -= limit;
-    const job = leaver(s);
-    if (job) s.jobs[job]--;
-    s.serfs--;
-    log(s, 'Ein Knecht flieht in die Wüste. Die Vorräte reichten nicht.');
+    const n = dismiss(s, P);
+    log(s, `${num(n)} Knechte fliehen in die Wüste. Die Vorräte reichten nicht.`);
   }
 
   // Warum gerade niemand kommt: 'full', 'hungry', 'frost', 'food' oder null (es kann jemand kommen).
-  // Der allererste Knecht kommt immer; danach nur, wenn der Überschuss für einen mehr reicht.
+  // Der allererste Schub kommt immer; danach nur, solange der Überschuss für einen weiteren Knecht reicht.
   function arrivalBlock(s) {
     if (s.serfs >= serfCap(s)) return 'full';
     if (s.isHungry) return 'hungry';
@@ -267,19 +279,40 @@ const Engine = (() => {
     return null;
   }
 
+  // Zuzug läuft stetig (ein Knecht je arrivalEvery, also P je alter Zuzugs-Zeit); der erste Schub kommt auf einmal.
+  // Das Log fasst zusammen: höchstens eine Zeile je arrivalLogEvery (s._arrived zählt bis dahin mit).
   function arrivals(s, dt) {
-    if (arrivalBlock(s)) { s.arrival = 0; return; }
+    if (arrivalBlock(s)) { s.arrival = 0; flushArrivals(s); return; }
     s.arrival += dt;
     const every = R.arrivalEvery / (1 + bonus(s, 'arrival.bonus'));
-    if (s.arrival < every - 1e-9) return;
-    s.arrival -= every;
-    s.serfs++;
+    if (!s.seen.serfs) {
+      if (s.arrival < every * P - 1e-9) return;
+      s.arrival = 0;
+      addSerfs(s, Math.min(P, serfCap(s)));
+      log(s, 'Überlebende kriechen aus den Ruinen. Sie schwören dir Treue.');
+      honor(s, 'Die ersten Knechte schließen sich dem Orden an.');
+      s.seen.serfs = true;
+      s._arrivedAt = s.time;
+      return;
+    }
+    // so viele, wie Zeit, Platz und Überschuss hergeben (keiner kommt, der danach hungert)
+    const n = Math.min(Math.floor(s.arrival / every + 1e-9), serfCap(s) - s.serfs,
+      Math.floor(rates(s).supplies / R.serfFood + 1e-9));
+    if (n < 1) return;
+    s.arrival = Math.min(s.arrival - n * every, every); // was Platz oder Vorräte nicht hergaben, staut sich nicht auf
+    addSerfs(s, n);
+    s._arrived = (s._arrived || 0) + n;
+    if (s.time - (s._arrivedAt ?? -Infinity) >= R.arrivalLogEvery - 1e-9) flushArrivals(s);
+  }
+  function addSerfs(s, n) {
+    s.serfs += n;
     const job = JOB[s.autoJob];
-    if (job && isUnlocked(s, job)) s.jobs[job.id]++;
-    if (s.seen.serfs) { log(s, 'Ein Knecht schließt sich dem Orden an.'); return; }
-    log(s, 'Ein Überlebender kriecht aus den Ruinen. Er schwört dir Treue.');
-    honor(s, 'Der erste Knecht schließt sich dem Orden an.');
-    s.seen.serfs = true;
+    if (job && isUnlocked(s, job)) s.jobs[job.id] += n;
+  }
+  function flushArrivals(s) {
+    if (s._arrived > 0) log(s, `+${num(s._arrived)} Knechte ziehen ein.`);
+    s._arrived = 0;
+    s._arrivedAt = s.time;
   }
 
   // ---------- Marines ----------
@@ -297,33 +330,48 @@ const Engine = (() => {
   const leanFood = s => Math.min(...R.seasons.map((_, i) => rates(s, i).supplies));
 
   // Warum gerade keine Implantation startet: 'lore', 'aspirant', 'geneseed', 'slot', 'cells', 'food' oder null.
-  // 'food': Auch in der Frostzeit muss ein weiterer Bruder satt werden – sonst verhungern die Knechte
-  // im nächsten Winter und alles steht still. Laufende Implantationen zählen schon mit.
+  // Ein Schub braucht P Aspiranten, P Gensaat und Platz für P Brüder.
+  // 'food': Auch in der Frostzeit müssen P weitere Brüder satt werden – sonst verhungern die Knechte
+  // im nächsten Winter und alles steht still. Laufende Schübe zählen schon mit.
   function implantBlock(s) {
     const m = s.marines;
     if (!s.tech.geneseedlore) return 'lore';
-    if (s.res.aspirants < 1 - 1e-9) return 'aspirant';
-    if (s.res.geneseed < 1 - 1e-9) return 'geneseed';
+    if (s.res.aspirants < P - 1e-9) return 'aspirant';
+    if (s.res.geneseed < P - 1e-9) return 'geneseed';
     if (m.implants.length >= bonus(s, 'implant.slots')) return 'slot';
-    if (marinesUsed(s) >= marineCap(s)) return 'cells';
-    if (s.isHungry || leanFood(s) < R.marineFood * (1 + m.implants.length) - 1e-9) return 'food';
+    if (marinesUsed(s) + P > marineCap(s) + 1e-9) return 'cells';
+    if (s.isHungry || leanFood(s) < R.marineFood * P * (1 + m.implants.length) - 1e-9) return 'food';
     return null;
   }
 
-  function implantDone(s) {
-    const m = s.marines, name = brotherName(s);
+  // Binomial-Zufall: je Kopf ein Wurf (Erfolg, wenn Zufall < p).
+  // ponytail: ab 4.096 Köpfen Normalnäherung (gerundet, auf 0…n begrenzt); die Schlachten (Etappe 13) rechnen eigene Massen.
+  function binom(n, p) {
+    if (n <= 0 || p <= 0) return 0;
+    if (p >= 1) return n;
+    if (n <= 4096) {
+      let k = 0;
+      for (let i = 0; i < n; i++) if (api.rng() < p) k++;
+      return k;
+    }
+    const z = Math.sqrt(-2 * Math.log(Math.max(api.rng(), 1e-12))) * Math.cos(2 * Math.PI * api.rng());
+    return Math.min(n, Math.max(0, Math.round(n * p + z * Math.sqrt(n * p * (1 - p)))));
+  }
+
+  // Ergebnis je Kopf: Erfolg, sonst Wulf (Space Wolves), sonst halb Servitor, halb tot.
+  function implantDone(s, n) {
+    const m = s.marines;
     const chance = Math.min(R.implantChanceMax,
       R.implantChance + R.apothecaryChance * s.offices.apothecary + bonus(s, 'implant.bonus'));
-    if (api.rng() < chance) {
-      m.neophytes.push(R.trainingTime);
-      log(s, `Aspirant ${name} übersteht die Implantate. Ein neuer Neophyt.`);
-      if (!s.seen.neophyte) { s.seen.neophyte = true; honor(s, 'Erster eigener Neophyt.'); }
-      return;
-    }
-    const wulf = bonus(s, 'implant.wulfen');
-    if (wulf && api.rng() < wulf) { m.wulfen++; log(s, `Aspirant ${name} verwandelt sich. Ein Wulf heult in den Zellen.`); }
-    else if (api.rng() < 0.5) { m.servitors++; log(s, `Aspirant ${name} überlebt, sein Geist nicht. Ein Servitor mehr.`); }
-    else log(s, `Aspirant ${name} stirbt unter dem Skalpell. Die Gensaat ist verloren.`);
+    const ok = binom(n, chance), wulfen = binom(n - ok, bonus(s, 'implant.wulfen'));
+    const servitors = binom(n - ok - wulfen, 0.5), dead = n - ok - wulfen - servitors;
+    if (ok) m.neophytes.push({ n: ok, left: R.trainingTime });
+    m.wulfen += wulfen;
+    m.servitors += servitors;
+    const parts = [`${num(ok)} Neophyten`, wulfen && `${num(wulfen)} Wulfen`, servitors && `${num(servitors)} Servitoren`,
+      dead && `${num(dead)} tot`].filter(Boolean);
+    log(s, `Implantation: ${parts.join(', ')}.`);
+    if (ok && !s.seen.neophyte) { s.seen.neophyte = true; honor(s, 'Die ersten eigenen Neophyten.'); }
   }
 
   // Implantationen, Ausbildung und Aufklärung laufen weiter; neue Implantationen starten von selbst.
@@ -331,21 +379,22 @@ const Engine = (() => {
     const m = s.marines;
     const implantSpeed = 1 / (1 - Math.min(R.apothecarySpeedMax, R.apothecarySpeed * s.offices.apothecary));
     for (let i = m.implants.length - 1; i >= 0; i--) {
-      m.implants[i] -= dt * implantSpeed;
-      if (m.implants[i] <= 1e-9) { m.implants.splice(i, 1); implantDone(s); }
+      m.implants[i].left -= dt * implantSpeed;
+      if (m.implants[i].left <= 1e-9) implantDone(s, m.implants.splice(i, 1)[0].n);
     }
     const trainSpeed = 1 / (1 - Math.min(R.trainingSpeedMax, bonus(s, 'training.speed')));
     for (let i = m.neophytes.length - 1; i >= 0; i--) {
-      m.neophytes[i] -= dt * trainSpeed;
-      if (m.neophytes[i] > 1e-9) continue;
+      const b = m.neophytes[i];
+      b.left -= dt * trainSpeed;
+      if (b.left > 1e-9) continue;
       m.neophytes.splice(i, 1);
-      m.brothers++;
-      log(s, `Neophyt ${brotherName(s)} legt die Servorüstung an. Ein neuer Kampfbruder.`);
+      m.brothers += b.n;
+      log(s, `${num(b.n)} Neophyten legen die Servorüstung an. Neue Kampfbrüder.`);
     }
     while (!implantBlock(s)) {
-      s.res.aspirants -= 1;
-      s.res.geneseed -= 1;
-      m.implants.push(R.implantTime);
+      s.res.aspirants -= P;
+      s.res.geneseed -= P;
+      m.implants.push({ n: P, left: R.implantTime });
     }
     for (let i = s.scouts.length - 1; i >= 0; i--) {
       s.scouts[i].left -= dt;
@@ -403,25 +452,20 @@ const Engine = (() => {
     if (bonus(s, 'thirst')) s.thirst = Math.min(THIRST_MAX, s.thirst + R.thirstPerMission);
   }
 
-  // Verluste nach Einsatz oder Feldzug: je Mitglied eine Verlust-Chance, die Gensaat Gefallener wird teils geborgen.
+  // Verluste nach Einsatz oder Feldzug: je Mitglied eine Verlust-Chance (als Binomial-Zufall), die Gensaat Gefallener
+  // wird teils geborgen. Das Log nennt Summen, keine Namen.
   function casualties(s, run, r, won) {
-    const ch = CH[s.chapter];
     const loss = Math.min(R.lossMax, (won ? R.lossWin : R.lossFail) / r) * (1 - bonus(s, 'loss.reduce'));
     const keep = Math.min(R.recoverMax,
       R.recoverChance + R.recoverApothecary * s.offices.apothecary + bonus(s, 'recover.bonus'));
-    const fallen = [];
-    let seed = 0;
-    for (let i = 0; i < run.brothers; i++) {
-      if (api.rng() >= loss) continue;
-      s.marines.brothers--;
-      fallen.push('Bruder ' + ch.names[(s.logSeq + fallen.length) % ch.names.length]);
-      if (api.rng() < keep) seed++;
-    }
-    for (let i = 0; i < run.wulfen; i++) if (api.rng() < loss) { s.marines.wulfen--; fallen.push('ein Wulf'); }
+    const brothers = binom(run.brothers, loss), wulfen = binom(run.wulfen, loss), seed = binom(brothers, keep);
+    s.marines.brothers -= brothers;
+    s.marines.wulfen -= wulfen;
     if (seed) s.res.geneseed = Math.min(cap(s, 'geneseed'), s.res.geneseed + seed);
-    if (!fallen.length) return;
-    log(s, `Gefallen: ${fallen.join(', ')}.` + (seed ? ` Gensaat geborgen: ${seed}.` : ''));
-    if (!s.seen.fallen && fallen[0].startsWith('Bruder')) { s.seen.fallen = true; honor(s, `Der erste Bruder fällt: ${fallen[0]}.`); }
+    if (!brothers && !wulfen) return;
+    const fallen = [brothers && `${num(brothers)} Brüder`, wulfen && `${num(wulfen)} Wulfen`].filter(Boolean);
+    log(s, `Gefallen: ${fallen.join(', ')}.` + (seed ? ` Gensaat geborgen: ${num(seed)}.` : ''));
+    if (!s.seen.fallen && brothers) { s.seen.fallen = true; honor(s, 'Die ersten Brüder fallen im Kampf.'); }
   }
 
   // Ab der Aschewüste wächst die Bedrohung; alle raidEvery Sekunden kommt ein Überfall, wenn sie die Verteidigung übersteigt.
@@ -436,12 +480,7 @@ const Engine = (() => {
     if (s._raids > 0) s._raids--;
     for (const id of ['supplies', 'scrap', 'ore']) s.res[id] *= 1 - R.raidLoss;
     let text = 'Ork-Überfall! Ein Zehntel der Lager ist geplündert.';
-    if (s.serfs > 0 && api.rng() < R.raidTake) {
-      const job = leaver(s);
-      if (job) s.jobs[job]--;
-      s.serfs--;
-      text += ' Ein Knecht wird verschleppt.';
-    }
+    if (s.serfs > 0 && api.rng() < R.raidTake) text += ` ${num(dismiss(s, P))} Knechte werden verschleppt.`;
     log(s, text);
   }
 
@@ -554,12 +593,12 @@ const Engine = (() => {
     log(s, ev.text.replace('{name}', brotherName(s)) + got.join(''));
   }
 
-  // Schwarzer Zorn: ein freier Bruder geht in die Todeskompanie und wartet auf den nächsten Kampfeinsatz.
+  // Schwarzer Zorn: P freie Brüder gehen in die Todeskompanie und warten auf den nächsten Kampfeinsatz.
   function blackRage(s) {
     s.thirst = R.thirstAfterRage;
-    s.marines.brothers--;
-    s.deathCompany = 1;
-    log(s, `Schwarzer Zorn! Bruder ${brotherName(s)} verliert sich in der Vision. Er wartet in der Todeskompanie auf den nächsten Kampf.`);
+    s.marines.brothers -= P;
+    s.deathCompany = P;
+    log(s, `Schwarzer Zorn! ${num(P)} Brüder verlieren sich in der Vision und warten in der Todeskompanie.`);
   }
 
   function orderTick(s, dt) {
@@ -583,7 +622,7 @@ const Engine = (() => {
     }
     // Erst der Zorn, dann lindern die Priester: sonst hielten sie den Durst ewig knapp unter 100.
     if (bonus(s, 'thirst')) {
-      if (s.thirst >= THIRST_MAX && !s.deathCompany && freeBrothers(s) >= 1) blackRage(s);
+      if (s.thirst >= THIRST_MAX && !s.deathCompany && freeBrothers(s) >= P) blackRage(s);
       s.thirst = Math.max(0, s.thirst - R.thirstPriest * s.offices.priest * dt);
     }
     if (s.tech.liturgy && (s.eventIn -= dt) <= 1e-9) {
@@ -762,15 +801,13 @@ const Engine = (() => {
     s.seen.navdata = true;
   }
 
-  // Servitor-Zelle: aus einem Knecht und etwas Plastahl wird ein Servitor.
+  // Servitor-Zelle: aus P Knechten und etwas Plastahl werden P Servitoren.
   function makeServitor(s) {
-    if (!s.bld.servitorCell || s.serfs < 1 || s.res.plasteel < R.servitorPlasteel - 1e-9) return false;
-    const job = leaver(s);
-    if (job) s.jobs[job]--;
-    s.serfs--;
+    if (!s.bld.servitorCell || s.serfs < P || s.res.plasteel < R.servitorPlasteel - 1e-9) return false;
+    dismiss(s, P);
     s.res.plasteel -= R.servitorPlasteel;
-    s.marines.servitors++;
-    log(s, 'Ein Knecht liegt auf dem Tisch des Mechanicus. Ein Servitor steht auf.');
+    s.marines.servitors += P;
+    log(s, `${num(P)} Knechte liegen auf den Tischen des Mechanicus. ${num(P)} Servitoren stehen auf.`);
     return true;
   }
 
@@ -893,18 +930,19 @@ const Engine = (() => {
     return true;
   }
 
+  // delta: ganze Zahl ≠ 0 (die Oberfläche schiebt P, „alle“ oder „0“).
   function assign(s, id, delta) {
     const j = JOB[id];
-    if (!j || !isUnlocked(s, j) || (delta !== 1 && delta !== -1)) return false;
-    if (delta > 0 ? free(s) < 1 : s.jobs[id] < 1) return false;
+    if (!j || !isUnlocked(s, j) || !Number.isInteger(delta) || delta === 0) return false;
+    if (delta > 0 ? free(s) < delta : s.jobs[id] < -delta) return false;
     s.jobs[id] += delta;
     return true;
   }
 
   function setOffice(s, id, delta) {
     const o = OFF[id];
-    if (!o || !isUnlocked(s, o) || (delta !== 1 && delta !== -1)) return false;
-    if (delta > 0 ? freeBrothers(s) < 1 : s.offices[id] < 1) return false;
+    if (!o || !isUnlocked(s, o) || !Number.isInteger(delta) || delta === 0) return false;
+    if (delta > 0 ? freeBrothers(s) < delta : s.offices[id] < -delta) return false;
     s.offices[id] += delta;
     dirty(s);
     return true;
@@ -969,9 +1007,9 @@ const Engine = (() => {
 
   function scout(s, id) {
     const p = PLACE[id];
-    if (!p || placeState(s, id) !== 'open' || freeBrothers(s) < 1) return false;
+    if (!p || placeState(s, id) !== 'open' || freeBrothers(s) < P) return false;
     s.scouts.push({ place: id, left: missionTime(s, p.time, true) });
-    log(s, `Bruder ${brotherName(s)} bricht zur Aufklärung auf: ${p.name}.`);
+    log(s, `${num(P)} Aufklärer brechen auf: ${p.name}.`);
     return true;
   }
 
@@ -979,22 +1017,48 @@ const Engine = (() => {
 
   const save = s => JSON.stringify(s, (k, v) => (k[0] === '_' ? undefined : v));
 
+  // v1 → v2 (Etappe 10): Köpfe ×P, Neophyten und Implantationen als Schübe zu P (gleiche Restzeit).
+  // Kompanien zählen weiter (1 alte Kompanie = 1 neue), Waren und Lager bleiben.
+  function migrate(raw) {
+    if (raw.v >= 2) return raw;
+    const x = v => (Number.isFinite(v) && v >= 0 ? v * P : v);
+    raw.serfs = x(raw.serfs);
+    raw.arrival = 0;
+    for (const key of ['jobs', 'offices', 'orders']) for (const id in raw[key] || {}) raw[key][id] = x(raw[key][id]);
+    if (raw.res && typeof raw.res === 'object') for (const id of ['aspirants', 'geneseed']) raw.res[id] = x(raw.res[id]);
+    const m = raw.marines;
+    if (m && typeof m === 'object') {
+      for (const k of ['coma', 'brothers', 'servitors', 'wulfen']) m[k] = x(m[k]);
+      const batches = list => (Array.isArray(list) ? list.filter(t => Number.isFinite(t) && t >= 0).map(left => ({ n: P, left })) : []);
+      m.neophytes = batches(m.neophytes);
+      m.implants = batches(m.implants);
+    }
+    for (const run of [...(Array.isArray(raw.missions) ? raw.missions : []), raw.campaign]) {
+      if (!run || typeof run !== 'object') continue;
+      run.brothers = x(run.brothers);
+      run.wulfen = x(run.wulfen);
+      if (run.dc) run.dc = x(run.dc);
+    }
+    raw.deathCompany = x(raw.deathCompany);
+    raw.v = 2;
+    return raw;
+  }
+
   // Lädt einen Spielstand, auch aus Import-Text: nur bekannte, gültige Werte; was fehlt, bleibt 0.
-  // ponytail: noch kein migrate() – das Mischen in einen frischen Stand deckt neue Inhalte ab;
-  // migrate() kommt mit dem ersten echten Formatwechsel.
   function load(json) {
     const raw = JSON.parse(json);
     if (!raw || typeof raw !== 'object' || !Number.isFinite(raw.v) || !CH[raw.chapter]) throw new Error('Kein Spielstand');
+    migrate(raw);
     const s = create(raw.chapter);
     s.log = [];
     if (typeof raw.name === 'string' && raw.name.trim() && raw.name.length <= R.nameMax) s.name = raw.name;
     if (PALETTE[raw.palette]) s.palette = raw.palette;
     const ok = v => Number.isFinite(v) && v >= 0;
-    const count = v => Math.min(Math.floor(v), 1e6); // Import-Schutz: absurde Anzahlen deckeln
+    const count = v => Math.min(Math.floor(v), 1e9); // Import-Schutz: absurde Anzahlen deckeln
     const str = v => (typeof v === 'string' ? v.slice(0, 200) : '');
     for (const k of ['time', 'savedAt', 'arrival', 'hungry', 'logSeq']) if (ok(raw[k])) s[k] = raw[k];
     s.time = Math.min(s.time, 1e10); // gut 300 Jahre Spielzeit; darüber bliebe die Uhr stehen
-    s.arrival = Math.min(s.arrival, R.arrivalEvery);
+    s.arrival = Math.min(s.arrival, R.arrivalEvery * P);
     s.hungry = Math.min(s.hungry, R.fleeAfter * (1 + bonus(s, 'flee.slow')));
     if (ok(raw.serfs)) s.serfs = count(raw.serfs);
     s.isHungry = raw.isHungry === true;
@@ -1008,9 +1072,10 @@ const Engine = (() => {
     flags(raw.places, PLACE, s.places);
     const m = raw.marines && typeof raw.marines === 'object' ? raw.marines : {};
     for (const k of ['coma', 'brothers', 'servitors', 'wulfen']) if (ok(m[k])) s.marines[k] = count(m[k]);
-    const timers = (v, max) => (Array.isArray(v) ? v.filter(ok).slice(0, 1e4).map(x => Math.min(x, max)) : []);
-    s.marines.neophytes = timers(m.neophytes, R.trainingTime);
-    s.marines.implants = timers(m.implants, R.implantTime);
+    const batches = (v, max) => (Array.isArray(v) ? v.filter(b => b && ok(b.n) && b.n >= 1 && ok(b.left)).slice(0, 1e4)
+      .map(b => ({ n: count(b.n), left: Math.min(b.left, max) })) : []);
+    s.marines.neophytes = batches(m.neophytes, R.trainingTime);
+    s.marines.implants = batches(m.implants, R.implantTime);
     for (const x of Array.isArray(raw.scouts) ? raw.scouts : []) {
       const p = x && PLACE[x.place];
       if (!p || !ok(x.left) || s.places[p.id] || s.scouts.some(y => y.place === p.id)) continue;
@@ -1018,8 +1083,8 @@ const Engine = (() => {
     }
     for (const id in s.offices) if (ok(raw.offices?.[id])) s.offices[id] = count(raw.offices[id]);
     // Aufklärer, Trupps und Ämter brauchen Brüder (Trupps auch Wulfen): Überzählige streichen
-    s.scouts = s.scouts.slice(0, s.marines.brothers);
-    let room = s.marines.brothers - s.scouts.length, wulfen = s.marines.wulfen;
+    s.scouts = s.scouts.slice(0, Math.floor(s.marines.brothers / P));
+    let room = s.marines.brothers - s.scouts.length * P, wulfen = s.marines.wulfen;
     for (const x of Array.isArray(raw.missions) ? raw.missions : []) {
       const m = x && MISSION[x.id];
       if (!m || !ok(x.brothers) || !ok(x.wulfen) || !ok(x.left) || s.missions.some(y => y.id === m.id)) continue;
@@ -1028,7 +1093,7 @@ const Engine = (() => {
       room -= b;
       wulfen -= w;
       const run = { id: m.id, brothers: b, wulfen: w, left: Math.min(x.left, m.time * 1.25) };
-      if (ok(x.dc) && x.dc >= 1) run.dc = 1;
+      if (ok(x.dc) && x.dc >= 1) run.dc = Math.min(count(x.dc), P);
       s.missions.push(run);
     }
     const c = raw.campaign;
@@ -1061,7 +1126,7 @@ const Engine = (() => {
     }
     if (ok(raw.companies)) s.companies = count(raw.companies);
     if (ok(raw.thirst)) s.thirst = Math.min(raw.thirst, THIRST_MAX);
-    if (ok(raw.deathCompany)) s.deathCompany = Math.min(count(raw.deathCompany), 1);
+    if (ok(raw.deathCompany)) s.deathCompany = Math.min(count(raw.deathCompany), P);
     if (ok(raw.eventIn)) s.eventIn = Math.min(raw.eventIn, R.eventEvery * 1.5);
     if (ok(raw.flairIn)) s.flairIn = Math.min(raw.flairIn, R.flairEvery);
     for (const id in raw.standing || {}) if (PARTNER[id] && ok(raw.standing[id])) s.standing[id] = Math.min(raw.standing[id], 1e6);
@@ -1089,7 +1154,7 @@ const Engine = (() => {
         .slice(-R.honorsMax).map(h => ({ date: h.date, chapter: h.chapter, text: h.text }));
     }
     dirty(s); // Gebäude und Lehren sind neu: Lager erst jetzt rechnen
-    while (free(s) < 0) s.jobs[leaver(s)]--;
+    if (free(s) < 0) takeJobs(s, -free(s));
     for (const id in s.res) s.res[id] = Math.min(s.res[id], cap(s, id));
     return s;
   }
@@ -1103,7 +1168,7 @@ const Engine = (() => {
     companies, productionBonus, litanyCost, litanyOpen, buyRite, chooseLitany, grandMass,
     standingLevel, tradeYield, trade, setStandingOrder, catchVision, makeServitor,
     shipPrice, fleetPower, buildShip, reachable, campaignTime, campaignCost, campaignChance, startCampaign,
-    legacyGain, foundBlock, found, buyRelic, offlineMax,
+    legacyGain, foundBlock, found, buyRelic, offlineMax, binom, migrate,
     rng: Math.random, // Zufall; Tests setzen hier eine feste Folge ein
   };
   return api;
