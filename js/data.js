@@ -648,8 +648,9 @@ const DATA = {
 // Das Tempo bleibt gleich.
 function scalePop(D, P = D.rules.popScale) {
   const R = D.rules;
-  // Mengen unter den Effekten: Ertrag/s, Lager, feste Verteidigung, Flottenstärke, Navigationsdaten je Vision
-  const AMOUNT = k => /\.(rate|cap)$/.test(k) || ['defense.flat', 'fleet.power', 'vision.bonus'].includes(k);
+  // Mengen unter den Effekten: Ertrag/s, Lager, Implantationsplätze, feste Verteidigung, Flottenstärke,
+  // Navigationsdaten je Vision. Gebäude und Schiffe zählen weiter einzeln.
+  const AMOUNT = k => /\.(rate|cap)$/.test(k) || ['implant.slots', 'defense.flat', 'fleet.power', 'vision.bonus'].includes(k);
   const all = o => { for (const k in o || {}) o[k] *= P; };
   const amounts = fx => { for (const k in fx || {}) if (AMOUNT(k)) fx[k] *= P; };
   const perHead = fx => { for (const k in fx || {}) if (!AMOUNT(k)) fx[k] /= P; }; // je Kopf oder Stück

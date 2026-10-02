@@ -332,7 +332,7 @@ const Engine = (() => {
   const leanFood = s => Math.min(...R.seasons.map((_, i) => rates(s, i).supplies));
 
   // Warum gerade keine Implantation startet: 'lore', 'aspirant', 'geneseed', 'slot', 'cells', 'food' oder null.
-  // Ein Schub braucht P Aspiranten, P Gensaat und Platz für P Brüder.
+  // Ein Schub braucht P Aspiranten, P Gensaat, P Implantationsplätze und Platz für P Brüder.
   // 'food': Auch in der Frostzeit müssen P weitere Brüder satt werden – sonst verhungern die Knechte
   // im nächsten Winter und alles steht still. Laufende Schübe zählen schon mit.
   function implantBlock(s) {
@@ -340,7 +340,7 @@ const Engine = (() => {
     if (!s.tech.geneseedlore) return 'lore';
     if (s.res.aspirants < P - 1e-9) return 'aspirant';
     if (s.res.geneseed < P - 1e-9) return 'geneseed';
-    if (m.implants.length >= bonus(s, 'implant.slots')) return 'slot';
+    if (heads(m.implants) + P > bonus(s, 'implant.slots') + 1e-9) return 'slot';
     if (marinesUsed(s) + P > marineCap(s) + 1e-9) return 'cells';
     if (s.isHungry || leanFood(s) < R.marineFood * P * (1 + m.implants.length) - 1e-9) return 'food';
     return null;

@@ -621,7 +621,10 @@ test('Implantation braucht Lehre, Aspirant, Gensaat, Implantationsplatz und Brü
   s.res.aspirants = P; s.res.geneseed = P / 2;
   assert.strictEqual(E.implantBlock(s), 'geneseed');
   s.res.geneseed = 2 * P; s.marines.implants = [{ n: P, left: 100 }];
-  assert.strictEqual(E.implantBlock(s), 'slot');             // ein Apothecarion = ein Platz
+  assert.strictEqual(E.implantBlock(s), 'slot');             // ein Apothecarion = P Plätze = ein Schub
+  s.bld.apothecarion = 2; s._eff = null;
+  assert.strictEqual(E.implantBlock(s), null);               // zwei Apothecarien: der zweite Schub passt
+  s.bld.apothecarion = 1; s._eff = null;
   s.marines.implants = []; s.marines.brothers = 9 * P + 1;   // Wrack 5 P + Zellentrakt 5 P: kein Platz mehr für P
   assert.strictEqual(E.implantBlock(s), 'cells');
   s.marines.brothers = 9 * P;
@@ -1563,6 +1566,8 @@ test('scalePop: alle Mengen ×P, Ertrag je Kopf bleibt, Anteile je Kopf ÷P (Sti
   near(byId(D.resources, 'servoskull').perUnit['scout.speed'], 0.02 / P, 'Anteil je Schädel');
   assert.strictEqual(byId(D.buildings, 'quarters').effects['serfs.cap'], 2 * P);
   assert.strictEqual(byId(D.buildings, 'cells').effects['marines.cap'], 5 * P);
+  assert.strictEqual(byId(D.buildings, 'apothecarion').effects['implant.slots'], P);   // ein Schub je Apothecarion
+  assert.strictEqual(byId(D.buildings, 'landingPad').effects['hangar.hawk'], 3);       // Schiffe zählen einzeln
   near(byId(D.buildings, 'arena').effects['aspirants.rate'], 0.001 * P, 'Arena');
   near(byId(D.buildings, 'hydroFarm').effects['supplies.rate'], 0.5 * P, 'Farm');
   assert.deepStrictEqual([byId(D.buildings, 'storehouse').effects['supplies.cap'], byId(D.buildings, 'bastion').effects['defense.flat']],

@@ -49,7 +49,7 @@ alles an Ressourcen auch angepasst werden“, „Das ganze Game entsprechend anp
 | Brüder-Plätze, Koma | Wrack 5, Zellentrakt +5; 5 im Koma | 500, +500; 500 |
 | Aspiranten | +0,001/s und Lager 2 je Arena | +0,1/s, Lager 200 |
 | Gensaat | Lager 3, Absturzstelle +5; Reifung 0,0005/s je Bruder | 300, +500; Reifung gleich |
-| Implantation | 1 Aspirant je Platz | Schub von 100 je Platz; Erfolg, Servitor und Tod je Kopf ausgewürfelt (Binomial) |
+| Implantation | 1 Implantationsplatz je Apothecarion | 100 Plätze je Apothecarion, belegt in Schüben zu 100; Erfolg, Servitor und Tod je Kopf ausgewürfelt (Binomial) |
 | Neophyten | Liste mit Zeit je Neophyt | Schübe `{ n, left }` |
 | Schmiede | 1 Stück je Arbeitsgang; Knöpfe +1, +10 | 100 Stück je Arbeitsgang; Knöpfe +100, +1.000; Preis je Stück gleich (50 Schrott → 1 Plastahl) |
 | Servitoren | Schrott 0,15/s je Servitor; Zelle: 1 Knecht + 5 Plastahl | gleich; Zelle: 100 Knechte + 500 Plastahl → 100 |

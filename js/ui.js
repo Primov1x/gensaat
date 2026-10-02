@@ -47,7 +47,7 @@
   const EFFECT_TEXT = {
     'serfs.cap': v => `+${fmt(v)} Knechte-Plätze`,
     'marines.cap': v => `+${fmt(v)} Brüder-Plätze`,
-    'implant.slots': v => `+${fmt(v)} Implantationsplatz`,
+    'implant.slots': v => `+${fmt(v)} Implantationsplätze`,
     'training.speed': v => `Ausbildung −${Math.round(v * 100)} %`,
     'power.bonus': v => `Kampfkraft ${pct(v)}`,
     'arrival.bonus': v => `Zuzug ${pct(v)}`,
