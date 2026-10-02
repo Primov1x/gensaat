@@ -170,8 +170,8 @@ test('Preise steigen mit dem Faktor, White Scars zahlen 15 % mehr', () => {
   s.res.scrap = 60 * P;
   assert.ok(E.build(s, 'quarters'));
   assert.ok(E.build(s, 'quarters'));
-  near(s.res.scrap, (60 - 12 - 19.2) * P, 'bezahlt (12 + 19,2) × P');
-  near(E.price(s, 'building', 'quarters').scrap, 30.72 * P, 'drittes Quartier');
+  near(s.res.scrap, (60 - 12 - 16.8) * P, 'bezahlt (12 + 16,8) × P');
+  near(E.price(s, 'building', 'quarters').scrap, 23.52 * P, 'drittes Quartier (12 × 1,4²)');
   assert.strictEqual(E.serfCap(s), 4 * P);
   s.res.scrap = 60 * P;
   assert.strictEqual(E.build(s, 'storehouse'), false);   // bezahlbar, aber noch nicht erforscht
@@ -450,7 +450,7 @@ test('Offline: simulate wie viele step(1), höchstens 3 Tage', () => {
 
 test('8 Std. offline: eine gut versorgte Festung übersteht jede Frostzeit', () => {
   const s = fresh();
-  s.tech.hydroponics = true; s.seen.serfs = true; s.res.supplies = 200 * P;
+  s.tech.hydroponics = true; s.seen.serfs = true; s.res.supplies = 200 * P; s.autoHousing = false;
   s.bld.quarters = 5; s.bld.hydroFarm = 10; s.serfs = 6 * P; s.jobs.farmer = 4 * P; s.jobs.scrapper = 2 * P;
   const lines = s.logSeq;
   E.simulate(s, 8 * 3600);
@@ -1680,6 +1680,34 @@ test('Migration v2 → v3: Waren, Bedrohung und Frömmigkeit ×P, Köpfe bleiben
   // je Kopf wie vorher: 10 P Schrottsammler × 0,3, Gedränge 22 P über 20 P −1 %, Frömmigkeit +2 %
   near(E.rates(s).scrap, 10 * 0.3 * 0.99 * 1.02 * P, 'Schrott je Sekunde');
   assert.strictEqual(E.save(E.load(E.save(s))), E.save(s));  // v3 wird nicht noch einmal umgerechnet
+});
+
+test('Wohnraum von selbst: bei vollen Quartieren bauen die Knechte aus vollen Lagern, wenn die Vorräte reichen', () => {
+  const s = fresh();
+  s.tech.hydroponics = true; s.seen.serfs = true;
+  s.bld.quarters = 2; s.bld.hydroFarm = 10; s._eff = null;
+  s.serfs = 4 * P; s.jobs.farmer = 2 * P; s.jobs.scrapper = 2 * P;
+  s.res.supplies = E.cap(s, 'supplies'); s.res.scrap = E.cap(s, 'scrap') - P;
+  assert.deepStrictEqual(E.housingPlan(s), { block: 'cost' });           // Lager nicht ganz voll: vielleicht sparst du
+  s.res.scrap = E.cap(s, 'scrap');
+  assert.deepStrictEqual(E.housingPlan(s), { id: 'quarters' });
+  E.step(s, 10);                                                        // geprüft wird alle 10 s
+  assert.strictEqual(s.bld.quarters, 3);
+  assert.strictEqual(s.log.at(-1).text, 'Die Knechte bauen selbst: Knechtsquartier Nr. 3.');
+  assert.deepStrictEqual(E.housingPlan(s), { block: 'room' });           // Platz frei, die Neuen kommen
+  const hungry = fresh();
+  hungry.seen.serfs = true; hungry.bld.quarters = 2; hungry.serfs = 4 * P; hungry._eff = null;
+  hungry.res.scrap = E.cap(hungry, 'scrap');
+  assert.deepStrictEqual(E.housingPlan(hungry), { block: 'food' });      // ohne Farmen würden die Neuen hungern
+  const h = fresh();
+  Object.assign(h.tech, { hydroponics: true, construction: true }); h.seen.serfs = true;
+  h.bld.quarters = 2; h.bld.hydroFarm = 20; h._eff = null; h.serfs = 4 * P;
+  h.res.scrap = E.cap(h, 'scrap'); h.res.ore = E.cap(h, 'ore'); h.res.plasteel = 25 * P;   // Plastahl ohne Lager: 5 Pakete
+  assert.deepStrictEqual(E.housingPlan(h), { id: 'hab' });               // Hab-Block zuerst
+  assert.ok(E.setAutoHousing(s, false));
+  assert.deepStrictEqual(E.housingPlan(s), { block: 'off' });
+  assert.strictEqual(E.load(E.save(s)).autoHousing, false);
+  assert.strictEqual(E.load(JSON.stringify({ v: V, chapter: 'da' })).autoHousing, true);   // ältere Stände: an
 });
 
 // ---------- Tempo-Bot ----------

@@ -162,7 +162,14 @@
   };
   const extra = id => (EXTRA[id] ? ' · ' + EXTRA[id]() : '');
 
-  const HINTS = { full: 'Alle Quartiere sind belegt.', frost: 'In der Frostzeit kommt niemand.', food: 'Für Neue fehlen Vorräte.' };
+  const HINTS = { frost: 'In der Frostzeit kommt niemand.', food: 'Für Neue fehlen Vorräte.' };
+  // Alle Plätze belegt: was der Wohnungsbau der Knechte gerade macht
+  const FULL = { off: 'Alle Quartiere sind belegt.', cost: 'Neue Quartiere kommen bei vollem Lager.',
+    food: 'Für mehr Knechte fehlen Frost-Vorräte.' };
+  const arrivalHint = () => {
+    const b = E.arrivalBlock(S);
+    return b === 'full' ? FULL[E.housingPlan(S).block] || 'Die Knechte bauen ein neues Quartier.' : HINTS[b] || '';
+  };
 
   function orderItems() {
     const items = [{
@@ -170,8 +177,14 @@
       make: () => { const el = document.createElement('div'); el.className = 'summary'; return { el }; },
       update: k => html(k.el,
         `<p>Knechte <b>${nHeads(S.serfs)} / ${fmt(E.serfCap(S))}</b> · frei <b>${nHeads(E.free(S))}</b></p>` +
-        `<p>Moral <b>${Math.round(E.moral(S) * 100)} %</b>${S.isHungry ? ' · <span class="miss">Hunger</span>' : ''}</p>` +
-        `<p class="muted hint">${HINTS[E.arrivalBlock(S)] || ''}</p>`),
+        `<p>Moral <b>${Math.round(E.moral(S) * 100)} %</b>${S.isHungry ? ' · <span class="miss">Hunger</span>' : ''}` +
+        ` · Vorräte im Frost <b${E.leanFood(S) < 0 ? ' class="miss"' : ''}>${fmtRate(E.leanFood(S))}</b></p>` +
+        `<p class="muted hint">${arrivalHint()}</p>`),
+    }, {
+      key: 'autohousing',
+      make: () => selectRow('Neue Quartiere', () => [['an', 'bauen die Knechte selbst'], ['', 'baust nur du']],
+        () => (S.autoHousing ? 'an' : null), v => E.setAutoHousing(S, !!v)),
+      update: k => k.update(),
     }];
     for (const j of D.jobs) {
       if (!E.isUnlocked(S, j)) continue;

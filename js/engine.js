@@ -32,7 +32,7 @@ const Engine = (() => {
       marines: { coma: R.comaBrothers, brothers: 0, neophytes: [], implants: [], servitors: 0, wulfen: 0 },
       offices: {}, places: {}, scouts: [],
       missions: [], orders: {}, threat: 0, raidTimer: 0,
-      upgrades: {}, servitorRecipe: null, autoJob: null, craftAcc: 0,
+      upgrades: {}, servitorRecipe: null, autoJob: null, craftAcc: 0, autoHousing: true,
       rites: {}, litany: null, litanyLeft: 0, piety: 0, boons: [], companies: 0,
       thirst: 0, deathCompany: 0, eventIn: R.eventEvery, flairIn: R.flairEvery,
       standing: {}, standingOrders: {}, orderTimer: 0, visionIn: R.visionEvery, vision: 0,
@@ -813,6 +813,30 @@ const Engine = (() => {
     return true;
   }
 
+  // ---------- Wohnraum von selbst ----------
+
+  // Sind alle Plätze belegt, bauen die Knechte selbst: einen Hab-Block, sonst ein Knechtsquartier. Bezahlt wird nur aus
+  // vollen Lagern (Waren ohne Lager ab orderPackages Paketen), damit nichts fehlt, worauf du gerade sparst.
+  const HOUSING = ['hab', 'quarters'];
+  const fullFor = (s, cost) => Object.entries(cost).every(([r, v]) =>
+    s.res[r] >= (cap(s, r) === Infinity ? v * R.orderPackages : Math.max(v, cap(s, r))) - 1e-9);
+  // Was die Knechte als Nächstes bauen ({ id }) oder warum nicht ({ block: 'off', 'room', 'cost' oder 'food' }).
+  // 'food': Die Brüder gehen vor. Auch mit den Neuen muss der Frost noch einen weiteren Schub Brüder satt machen,
+  // wie bei der Implantation.
+  function housingPlan(s) {
+    if (!s.autoHousing) return { block: 'off' };
+    if (s.serfs < serfCap(s)) return { block: 'room' };
+    const id = HOUSING.find(x => isUnlocked(s, BLD[x]) && fullFor(s, price(s, 'building', x)));
+    if (!id) return { block: 'cost' };
+    const eat = R.serfFood * BLD[id].effects['serfs.cap'] * (1 + bonus(s, 'serfs.capPct'));
+    return leanFood(s) - eat >= R.marineFood * P * (1 + s.marines.implants.length) - 1e-9 ? { id } : { block: 'food' };
+  }
+  function autoHousing(s) {
+    const { id } = housingPlan(s);
+    if (id && build(s, id)) log(s, `Die Knechte bauen selbst: ${BLD[id].name} Nr. ${s.bld[id]}.`);
+  }
+  function setAutoHousing(s, on) { s.autoHousing = !!on; return true; }
+
   function worldEvent(s, w) {
     if (w.id === 'trader') {
       if (s.seen.valkar) s.docked = true;
@@ -828,11 +852,12 @@ const Engine = (() => {
     log(s, w.text.replace('{threat}', num(w.threat || 0)));
   }
 
-  // Aufträge, Visionen, Warpsturm und Welt-Ereignisse.
+  // Aufträge, Wohnungsbau, Visionen, Warpsturm und Welt-Ereignisse.
   function relationsTick(s, dt) {
     if ((s.orderTimer += dt) >= R.orderEvery - 1e-9) {
       s.orderTimer -= R.orderEvery;
       for (const id in s.standingOrders) if (surplusFor(s, PARTNER[id].give)) trade(s, id, true);
+      autoHousing(s);
     }
     if (s.storm > 0 && (s.storm -= dt) <= 1e-9) {
       s.storm = 0;
@@ -1122,6 +1147,7 @@ const Engine = (() => {
     flags(raw.upgrades, UPG, s.upgrades);
     if (RECIPE[raw.servitorRecipe]) s.servitorRecipe = raw.servitorRecipe;
     if (JOB[raw.autoJob]) s.autoJob = raw.autoJob;
+    s.autoHousing = raw.autoHousing !== false; // ältere Stände: an
     if (ok(raw.craftAcc)) s.craftAcc = Math.min(raw.craftAcc, 1);
     flags(raw.rites, RITE, s.rites);
     if (LITANY[raw.litany]) {
@@ -1175,7 +1201,7 @@ const Engine = (() => {
     needs, isUnlocked, price, canAfford, eta, click, build, research, assign, setOffice, scout,
     sendMission, setOrder, craft, buyUpgrade, setServitorRecipe, setAutoJob, save, load,
     companies, productionBonus, pietyBonus, litanyCost, litanyOpen, buyRite, chooseLitany, grandMass,
-    standingLevel, tradeYield, trade, setStandingOrder, catchVision, makeServitor,
+    standingLevel, tradeYield, trade, setStandingOrder, catchVision, makeServitor, housingPlan, setAutoHousing,
     shipPrice, fleetPower, buildShip, reachable, campaignTime, campaignCost, campaignChance, startCampaign,
     legacyGain, foundBlock, found, buyRelic, offlineMax, binom, migrate,
     rng: Math.random, // Zufall; Tests setzen hier eine feste Folge ein

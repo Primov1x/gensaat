@@ -292,7 +292,7 @@ const DATA = {
     { id: 'hydroFarm', name: 'Hydrokulturfarm', desc: 'Nährtanks im Schutt. In der Sonnenzeit wächst es am besten.',
       cost: { supplies: 10 }, ratio: 1.12, effects: { 'supplies.rate': 0.5 } },
     { id: 'quarters', name: 'Knechtsquartier', desc: 'Ein abgedichteter Trakt im Wrack. Pritschen in langen Reihen.',
-      cost: { scrap: 12 }, ratio: 1.6, effects: { 'serfs.cap': 2 } },
+      cost: { scrap: 12 }, ratio: 1.4, effects: { 'serfs.cap': 2 } },
     { id: 'scriptorium', name: 'Skriptorium', desc: 'Pulte, Kerzen, geborgene Datenkristalle. Schreiber sammeln Wissen.',
       cost: { scrap: 25, supplies: 10 }, ratio: 1.15, effects: { 'knowledge.cap': 100, 'knowledge.bonus': 0.05 },
       requires: { seen: 'serfs' } },

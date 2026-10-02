@@ -65,6 +65,14 @@ alles an Ressourcen auch angepasst werden“, „Das ganze Game entsprechend anp
 | Astra Militarum (Tausch) | 300 Vorräte → 2 Knechte | 30.000 → 200 |
 
 - Gleich bleiben: Zeiten, Prozente, Chancen, Moral, Roter Durst, Ansehen, Vermächtnis-Punkte, Zahl der Gebäude und Schiffe.
+- Wohnraum von selbst (Nachtrag 02.10.2026, Nutzer: „kriegen wir hin das knechte automatisch steigen, hab das gefühl
+  die quartiere dauern ewig“): Sind alle Plätze belegt, bauen die Knechte selbst, erst einen Hab-Block, sonst ein
+  Knechtsquartier. Bezahlt wird nur aus vollen Lagern (Waren ohne Lager ab 5 Paketen), geprüft alle 10 s, auch
+  offline. Die Brüder gehen vor: gebaut wird nur, wenn auch mit den Neuen der Frost noch einen Schub Brüder satt macht.
+  Umschalter im Reiter Orden („Neue Quartiere: bauen die Knechte selbst / baust nur du“), Standard an. Dazu steigt der
+  Preis je Knechtsquartier nur noch ×1,4 statt ×1,6: Vorher hing man ab Tag 1 bei 11–12 Quartieren fest (das nächste
+  kostete mehr Schrott, als ins Lager passte), bis Tag 4 die Hab-Blöcke kamen. Jetzt gibt es ab Tag 1 rund 3.200 statt
+  2.200 Knechte; das Tempo bleibt im Ziel. Der Reiter Orden zeigt neben der Moral die Vorräte im Frost.
 - Anzeige: ganze Zahlen mit Tausenderpunkt bis 999.999, darüber „1,2 Mio.“.
 - Log fasst Massen zusammen: Zuzug höchstens eine Zeile je Minute („+300 Knechte ziehen ein“), Flucht, Verluste und
   Implantation als Summen. Brüder-Namen erscheinen nur noch bei Helden und in Flair-Zeilen.
